@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    
+    <!-- Silk Icon - Elegant flowing S with subtle depth -->
+    
+    <!-- Outer glow / shadow layer for depth -->
+    <path
+        android:fillColor="#B8956A"
+        android:fillAlpha="0.3"
+        android:pathData="M54,26
+            C68,26 78,34 78,46
+            C78,54 72,60 64,64
+            C72,68 78,74 78,82
+            C78,94 68,102 54,102
+            C40,102 30,94 30,82
+            C30,74 36,68 44,64
+            C36,60 30,54 30,46
+            C30,34 40,26 54,26
+            Z"/>
+    
+    <!-- Main S shape - elegant silk ribbon -->
+    <path
+        android:fillColor="#C9A86C"
+        android:pathData="M54,30
+            C65,30 74,37 74,47
+            C74,53 70,58 63,61
+            L63,61
+            C58,63 54,66 54,70
+            C54,74 58,77 63,79
+            C70,82 74,87 74,93
+            C74,98 65,98 54,98
+            C43,98 34,93 34,83
+            C34,77 38,72 45,69
+            L45,69
+            C50,67 54,64 54,60
+            C54,56 50,53 45,51
+            C38,48 34,43 34,37
+            C34,32 43,30 54,30
+            Z"/>
+    
+    <!-- Inner highlight - silk sheen effect -->
+    <path
+        android:fillColor="#E8D4B0"
+        android:fillAlpha="0.6"
+        android:pathData="M54,34
+            C62,34 68,39 68,46
+            C68,50 65,54 60,56
+            C56,58 54,60 54,63
+            C54,60 52,58 48,56
+            C43,54 40,50 40,46
+            C40,39 46,34 54,34
+            Z"/>
+    
+    <!-- Top accent dot - intelligence -->
+    <path
+        android:fillColor="#A8894D"
+        android:pathData="M54,38
+            C57,38 59,40 59,43
+            C59,46 57,48 54,48
+            C51,48 49,46 49,43
+            C49,40 51,38 54,38
+            Z"/>
+    
+    <!-- Subtle inner curve highlight -->
+    <path
+        android:fillColor="#F5E6D3"
+        android:fillAlpha="0.4"
+        android:pathData="M58,42
+            C60,42 61,43 61,45
+            C61,47 60,48 58,48
+            C56,48 55,47 55,45
+            C55,43 56,42 58,42
+            Z"/>
+
+</vector>

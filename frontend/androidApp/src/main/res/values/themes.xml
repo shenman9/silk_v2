@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Silk 主题 - 温暖的香槟金色调 -->
+    <style name="Theme.Silk" parent="android:Theme.Material.Light.NoActionBar">
+        <!-- 主色调 - 温暖的香槟金 -->
+        <item name="android:colorPrimary">#C9A86C</item>
+        <item name="android:colorPrimaryDark">#A8894D</item>
+        <item name="android:colorAccent">#E8B86C</item>
+        
+        <!-- 背景色 - 温暖的奶白色 -->
+        <item name="android:windowBackground">@android:color/white</item>
+        <item name="android:colorBackground">#FDF8F0</item>
+        
+        <!-- 状态栏 -->
+        <item name="android:statusBarColor">#A8894D</item>
+        <item name="android:navigationBarColor">#C9A86C</item>
+        
+        <!-- 文字颜色 -->
+        <item name="android:textColorPrimary">#4A4038</item>
+        <item name="android:textColorSecondary">#8A7B6A</item>
+    </style>
+</resources>

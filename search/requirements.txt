@@ -1,0 +1,22 @@
+# Silk Context Search - Python Dependencies
+#
+# 安装: pip install -r requirements.txt
+
+# Weaviate 客户端
+weaviate-client>=4.4.0
+
+# 文件监视
+watchdog>=3.0.0
+
+# HTTP 请求
+requests>=2.31.0
+
+# 可选: 本地嵌入模型
+# sentence-transformers>=2.2.0
+
+# 可选: 文档解析 (如果不用 Tika)
+# unstructured>=0.11.0
+# python-magic>=0.4.27
+# pdf2image>=1.16.0
+# pytesseract>=0.3.10
+

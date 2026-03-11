@@ -1,0 +1,88 @@
+# Gradle
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+
+# Backend static (build output from frontend)
+backend/static/*.js
+backend/static/*.js.map
+backend/static/*.js.LICENSE.txt
+backend/static/*.html
+backend/static/index.html
+
+# IDEA
+.idea/
+*.iml
+*.ipr
+*.iws
+out/
+
+# macOS
+.DS_Store
+
+# Android
+*.apk
+*.ap_
+*.dex
+local.properties
+captures/
+*.jks
+*.keystore
+
+# iOS
+*.ipa
+*.dSYM.zip
+*.dSYM
+DerivedData/
+*.pbxuser
+*.mode1v3
+*.mode2v3
+*.perspectivev3
+*.xcuserstate
+xcuserdata/
+
+# Logs and runtime PID
+*.log
+*.pid
+
+# Kotlin
+kotlin-js-store/
+node_modules/
+
+# Chat History (runtime data)
+chat_history/
+*.pdf
+backend.log
+backend.pid
+backend_test.log
+
+# Large binary files (download separately)
+search/weaviate
+search/weaviate.zip
+search/weaviate-linux.tar.gz
+search/*.tar.gz
+search/bin/
+weaviate-linux
+
+# Database
+*.db
+
+# Weaviate runtime data (vector database indexes)
+search/weaviate_data/
+
+# Environment and secrets (use .env.example as template)
+.env
+.env.local
+.env.*.local
+
+# Test scripts (may contain or require API keys, local use only)
+test_api.sh
+test_brave_search.py
+test_brave_search.sh
+test_serpapi.py
+
+# Private server/cloud info (use .example as template)
+frontend/webApp/src/main/kotlin/com/silk/web/public_cloud.txt
+
+# Internal reference only (do not publish)
+SECURITY_AUDIT.md

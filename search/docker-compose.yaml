@@ -1,0 +1,101 @@
+# Silk Context Search Engine - Weaviate Sidecar
+# 
+# 启动: docker-compose up -d
+# 停止: docker-compose down
+# 查看日志: docker-compose logs -f
+# 
+# Weaviate API: http://localhost:8008
+# Weaviate gRPC: localhost:50051
+
+version: '3.8'
+
+services:
+  weaviate:
+    image: cr.weaviate.io/semitechnologies/weaviate:1.27.0
+    container_name: silk-weaviate
+    restart: unless-stopped
+    ports:
+      - "8008:8080"  # REST API (对外开放端口 8008)
+      - "50051:50051"  # gRPC
+    volumes:
+      - ./weaviate_data:/var/lib/weaviate
+    environment:
+      # 基础配置
+      QUERY_DEFAULTS_LIMIT: 25
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: 'true'
+      PERSISTENCE_DATA_PATH: '/var/lib/weaviate'
+      DEFAULT_VECTORIZER_MODULE: 'text2vec-transformers'
+      
+      # 启用模块
+      ENABLE_MODULES: 'text2vec-transformers,multi2vec-clip,generative-openai,reranker-cohere'
+      
+      # Transformers 配置 (本地模型)
+      TRANSFORMERS_INFERENCE_API: 'http://t2v-transformers:8080'
+      
+      # CLIP 配置 (图像+文本)
+      CLIP_INFERENCE_API: 'http://multi2vec-clip:8080'
+      
+      # 集群配置 (单节点)
+      CLUSTER_HOSTNAME: 'node1'
+      
+      # 性能调优
+      QUERY_MAXIMUM_RESULTS: 10000
+      DISK_USE_WARNING_PERCENTAGE: 80
+      
+    depends_on:
+      - t2v-transformers
+      - multi2vec-clip
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/v1/.well-known/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # 文本向量化模型 (本地运行)
+  t2v-transformers:
+    image: cr.weaviate.io/semitechnologies/transformers-inference:sentence-transformers-paraphrase-multilingual-MiniLM-L12-v2
+    container_name: silk-t2v
+    restart: unless-stopped
+    environment:
+      ENABLE_CUDA: '0'  # CPU 模式，设为 1 使用 GPU
+      # 可选模型:
+      # sentence-transformers-paraphrase-multilingual-MiniLM-L12-v2 (多语言，推荐)
+      # sentence-transformers-all-MiniLM-L6-v2 (英文，更快)
+      # sentence-transformers-multi-qa-MiniLM-L6-cos-v1 (问答优化)
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+
+  # 多模态模型 (图像+文本)
+  multi2vec-clip:
+    image: cr.weaviate.io/semitechnologies/multi2vec-clip:sentence-transformers-clip-ViT-B-32-multilingual-v1
+    container_name: silk-clip
+    restart: unless-stopped
+    environment:
+      ENABLE_CUDA: '0'
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+
+  # 文档解析服务 (Apache Tika)
+  tika:
+    image: apache/tika:2.9.1.0
+    container_name: silk-tika
+    restart: unless-stopped
+    ports:
+      - "9998:9998"
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
+volumes:
+  weaviate_data:
+    driver: local
+
+networks:
+  default:
+    name: silk-search-network
+

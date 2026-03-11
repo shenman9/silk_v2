@@ -1,0 +1,19 @@
+<configuration>
+    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <!-- ✅ 简化日志格式，减少输出量 -->
+            <pattern>%d{HH:mm:ss} %-5level %logger{20} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <root level="INFO">
+        <appender-ref ref="STDOUT"/>
+    </root>
+
+    <logger name="io.ktor" level="INFO"/>
+    <!-- ✅ 保持INFO级别，但在代码中保留关键的模型调用日志 -->
+    <logger name="com.silk" level="INFO"/>
+    <!-- ✅ AI模块的日志保持INFO级别，显示关键操作 -->
+    <logger name="com.silk.backend.ai" level="INFO"/>
+</configuration>
+

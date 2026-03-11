@@ -1,0 +1,6 @@
+Public cloud information:
+
+IP: your.server.ip
+Account name: your_username
+password: your_password
+open socket ports: 22, 80, 443, 8001-8009

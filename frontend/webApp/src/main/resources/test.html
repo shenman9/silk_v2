@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Silk Web UI - 测试页面</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            background: white;
+            border-radius: 16px;
+            padding: 40px;
+            max-width: 600px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            text-align: center;
+        }
+        
+        h1 {
+            color: #1976d2;
+            margin-bottom: 20px;
+            font-size: 32px;
+        }
+        
+        .status {
+            background: #e3f2fd;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+        
+        .status-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid #90caf9;
+        }
+        
+        .status-item:last-child {
+            border-bottom: none;
+        }
+        
+        .label {
+            font-weight: bold;
+            color: #555;
+        }
+        
+        .value {
+            color: #1976d2;
+        }
+        
+        .btn {
+            background: #1976d2;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            font-size: 16px;
+            cursor: pointer;
+            margin: 10px;
+            transition: background 0.3s;
+        }
+        
+        .btn:hover {
+            background: #1565c0;
+        }
+        
+        .btn-secondary {
+            background: #4caf50;
+        }
+        
+        .btn-secondary:hover {
+            background: #45a049;
+        }
+        
+        .note {
+            background: #fff3cd;
+            border-left: 4px solid #ffc107;
+            padding: 15px;
+            margin: 20px 0;
+            text-align: left;
+        }
+        
+        .success {
+            background: #d4edda;
+            border-left: 4px solid #28a745;
+            padding: 15px;
+            margin: 20px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎉 Silk Web UI</h1>
+        
+        <div class="success">
+            <strong>✅ 成功!</strong> 如果您能看到这个页面，说明Web服务器正常运行。
+        </div>
+        
+        <div class="status">
+            <div class="status-item">
+                <span class="label">Web UI端口:</span>
+                <span class="value" id="web-port">8081</span>
+            </div>
+            <div class="status-item">
+                <span class="label">后端端口:</span>
+                <span class="value" id="backend-port">8080</span>
+            </div>
+            <div class="status-item">
+                <span class="label">页面版本:</span>
+                <span class="value">20251102-002</span>
+            </div>
+            <div class="status-item">
+                <span class="label">后端状态:</span>
+                <span class="value" id="backend-status">检查中...</span>
+            </div>
+        </div>
+        
+        <button class="btn" onclick="testBackend()">🔍 测试后端连接</button>
+        <button class="btn btn-secondary" onclick="openDesktopGuide()">📱 使用Desktop UI</button>
+        
+        <div class="note">
+            <p><strong>⚠️ 重要提示</strong></p>
+            <p>Web UI目前遇到技术问题（Kotlin/JS兼容性）。</p>
+            <p style="margin-top: 10px;"><strong>强烈推荐使用Desktop UI</strong>，功能完整且稳定可靠。</p>
+        </div>
+        
+        <div id="result" style="margin-top: 20px;"></div>
+    </div>
+    
+    <script>
+        console.log('📦 测试页面版本: 20251102-002');
+        
+        // 测试后端连接
+        async function testBackend() {
+            const resultDiv = document.getElementById('result');
+            const statusSpan = document.getElementById('backend-status');
+            
+            resultDiv.innerHTML = '<p>⏳ 正在测试后端...</p>';
+            
+            try {
+                const response = await fetch('http://localhost:8080/health');
+                const data = await response.json();
+                
+                if (data.status === 'ok') {
+                    statusSpan.textContent = '✅ 正常';
+                    statusSpan.style.color = '#4caf50';
+                    resultDiv.innerHTML = `
+                        <div class="success">
+                            <strong>✅ 后端连接成功!</strong><br>
+                            服务: ${data.service}<br>
+                            状态: ${data.status}
+                        </div>
+                    `;
+                }
+            } catch (error) {
+                statusSpan.textContent = '❌ 离线';
+                statusSpan.style.color = '#f44336';
+                resultDiv.innerHTML = `
+                    <div style="background: #f8d7da; border-left: 4px solid #dc3545; padding: 15px;">
+                        <strong>❌ 后端连接失败</strong><br>
+                        错误: ${error.message}<br>
+                        <br>
+                        请确保后端已启动：<br>
+                        <code>./start-backend.sh</code>
+                    </div>
+                `;
+            }
+        }
+        
+        function openDesktopGuide() {
+            alert('Desktop UI启动命令：\n\n./start-desktop.sh\n\nDesktop UI功能完整且稳定，强烈推荐！');
+        }
+        
+        // 页面加载时自动测试后端
+        window.onload = function() {
+            console.log('✅ 测试页面已加载');
+            testBackend();
+        };
+    </script>
+</body>
+</html>
+

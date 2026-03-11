@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+    
+    <!-- Background circle -->
+    <path
+        android:fillColor="#FDF8F0"
+        android:pathData="M24,24 m-22,0 a22,22 0 1,1 44,0 a22,22 0 1,1 -44,0"/>
+    
+    <!-- S shape -->
+    <path
+        android:fillColor="#C9A86C"
+        android:pathData="M24,10
+            C30,10 35,13 35,18
+            C35,21 33,24 29,25
+            C26,26 24,28 24,30
+            C24,32 26,34 29,35
+            C33,36 35,39 35,42
+            C35,47 30,48 24,48
+            C18,48 13,45 13,40
+            C13,37 15,34 19,33
+            C22,32 24,30 24,28
+            C24,26 22,24 19,23
+            C15,22 13,19 13,16
+            C13,11 18,10 24,10
+            Z"/>
+    
+    <!-- Highlight -->
+    <path
+        android:fillColor="#E8D4B0"
+        android:fillAlpha="0.5"
+        android:pathData="M24,14
+            C28,14 31,16 31,19
+            C31,21 29,23 26,24
+            C24,24 24,25 24,26
+            C24,25 22,24 20,23
+            C17,22 15,20 15,18
+            C15,15 18,14 24,14
+            Z"/>
+    
+    <!-- Accent dot -->
+    <path
+        android:fillColor="#A8894D"
+        android:pathData="M24,16 m-2,0 a2,2 0 1,1 4,0 a2,2 0 1,1 -4,0"/>
+
+</vector>
