@@ -909,6 +909,61 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                     property("gap", "12px")
                 }
             }) {
+                // @Silk 快捷按钮
+                Div({
+                    style {
+                        display(DisplayStyle.Flex)
+                        property("justify-content", "flex-start")
+                        property("gap", "8px")
+                        alignItems(AlignItems.Center)
+                    }
+                }) {
+                    Button({
+                        style {
+                            padding(6.px, 12.px)
+                            backgroundColor(Color("rgba(201, 168, 108, 0.15)"))
+                            color(Color(SilkColors.primary))
+                            border {
+                                width(1.px)
+                                style(LineStyle.Solid)
+                                color(Color(SilkColors.primary))
+                            }
+                            borderRadius(16.px)
+                            property("cursor", "pointer")
+                            fontSize(13.px)
+                            property("font-weight", "500")
+                            property("transition", "all 0.2s ease")
+                            property("white-space", "nowrap")
+                        }
+                        onClick {
+                            // 在输入框中插入 @Silk
+                            val input = document.getElementById("chat-input") as? org.w3c.dom.HTMLTextAreaElement
+                            if (input != null) {
+                                val currentText = messageText
+                                val cursorPos = input.selectionStart ?: currentText.length
+                                val beforeCursor = currentText.substring(0, cursorPos)
+                                val afterCursor = currentText.substring(cursorPos)
+                                messageText = "$beforeCursor@Silk $afterCursor"
+                                // 移动光标到插入文本之后
+                                window.setTimeout({
+                                    val newPos = cursorPos + 6 // "@Silk " 的长度
+                                    input.setSelectionRange(newPos, newPos)
+                                    input.focus()
+                                }, 0)
+                            } else {
+                                // 如果无法获取输入框，直接追加
+                                messageText = if (messageText.isEmpty() || messageText.endsWith(" ")) {
+                                    "${messageText}@Silk "
+                                } else {
+                                    "${messageText} @Silk "
+                                }
+                            }
+                        }
+                    }) {
+                        Text("@Silk")
+                    }
+                }
+                
                 // 第一行：输入框占据整行
                 // 发送消息的函数
                 val sendMessage: () -> Unit = {
