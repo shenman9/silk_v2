@@ -16,8 +16,28 @@
 #   ./silk.sh weaviate - Weaviate 管理 (start/stop/status/schema)
 # ============================================================
 
-export JAVA_HOME=/usr/lib/jvm/java-17-openjdk
+
+# Java Home - 支持 macOS Homebrew 和 Linux
+if [ -d "/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home" ]; then
+    export JAVA_HOME="/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home"
+elif [ -d "/usr/lib/jvm/java-17-openjdk" ]; then
+    export JAVA_HOME=/usr/lib/jvm/java-17-openjdk
+else
+    export JAVA_HOME=$(dirname $(dirname $(readlink -f $(which java) 2>/dev/null || echo "/usr/bin/java") 2>/dev/null) 2>/dev/null)
+fi
 export PATH=$JAVA_HOME/bin:$PATH
+
+# Android SDK - 支持 macOS Homebrew、Linux 和 Android Studio
+if [ -d "/opt/homebrew/share/android-commandlinetools" ]; then
+    export ANDROID_HOME="/opt/homebrew/share/android-commandlinetools"
+elif [ -d "$HOME/Library/Android/sdk" ]; then
+    export ANDROID_HOME="$HOME/Library/Android/sdk"
+elif [ -d "/usr/lib/android-sdk" ]; then
+    export ANDROID_HOME=/usr/lib/android-sdk
+fi
+if [ -n "$ANDROID_HOME" ]; then
+    export PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH
+fi
 
 # 颜色定义
 RED='\033[0;31m'
@@ -33,9 +53,13 @@ SILK_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # 加载 .env（API Key、BACKEND_HOST 等，构建 APK 时会用到）
 if [ -f "$SILK_DIR/.env" ]; then
+    # 转换 CRLF 为 LF 并加载
+    TMP_ENV=$(mktemp)
+    tr -d '\r' < "$SILK_DIR/.env" > "$TMP_ENV"
     set -a
-    source <(sed 's/\r$//' "$SILK_DIR/.env")
+    source "$TMP_ENV"
     set +a
+    rm -f "$TMP_ENV"
 fi
 
 # 端口定义
@@ -44,6 +68,13 @@ FRONTEND_PORT=8005
 WEAVIATE_HTTP_PORT=8008
 WEAVIATE_GRPC_PORT=50051
 
+# Weaviate URL 处理：优先使用 .env 中的 WEAVIATE_URL，否则使用本地
+WEAVIATE_CHECK_URL="${WEAVIATE_URL:-http://localhost:$WEAVIATE_HTTP_PORT}"
+# 判断是否使用远程 Weaviate
+WEAVIATE_IS_REMOTE=false
+if [ -n "$WEAVIATE_URL" ] && [[ ! "$WEAVIATE_URL" =~ localhost|127\.0\.0\.1 ]]; then
+    WEAVIATE_IS_REMOTE=true
+fi
 # APK 输出目录
 APK_OUTPUT_DIR="$SILK_DIR/backend/static"
 
@@ -161,10 +192,36 @@ weaviate_status() {
 weaviate_start() {
     echo -e "${BLUE}启动 Weaviate...${NC}"
     
-    # 检查是否已运行
+    # 检查 .env 中是否配置了远程 WEAVIATE_URL
+    if [ -n "$WEAVIATE_URL" ]; then
+        # 提取 host:port (去掉 http:// 前缀)
+        local WEAVIATE_ENDPOINT="${WEAVIATE_URL#http://}"
+        WEAVIATE_ENDPOINT="${WEAVIATE_ENDPOINT#https://}"
+        
+        # 检查远程 Weaviate 是否可用
+        local READY=$(curl -s -o /dev/null -w "%{http_code}" "$WEAVIATE_URL/v1/.well-known/ready" 2>/dev/null)
+        if [ "$READY" == "200" ]; then
+            echo -e "  ${GREEN}✓ 远程 Weaviate 已就绪: $WEAVIATE_URL${NC}"
+            return 0
+        else
+            echo -e "  ${YELLOW}⚠ 远程 Weaviate ($WEAVIATE_URL) 不可用 (HTTP $READY)${NC}"
+            echo -e "  ${YELLOW}  将启动本地 Weaviate...${NC}"
+        fi
+    fi
+    
+    # 检查本地是否已运行且就绪
     if check_port $WEAVIATE_HTTP_PORT; then
-        echo -e "  ${YELLOW}Weaviate 已在运行${NC}"
-        return 0
+        local READY=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:$WEAVIATE_HTTP_PORT/v1/.well-known/ready" 2>/dev/null)
+        if [ "$READY" == "200" ]; then
+            echo -e "  ${GREEN}✓ 本地 Weaviate 已就绪，跳过启动${NC}"
+            return 0
+        else
+            echo -e "  ${YELLOW}⚠ 端口 $WEAVIATE_HTTP_PORT 被占用但不是 Weaviate，尝试清理...${NC}"
+            docker rm -f silk-weaviate 2>/dev/null
+            kill_port_process $WEAVIATE_HTTP_PORT "Weaviate HTTP" true
+            kill_port_process $WEAVIATE_GRPC_PORT "Weaviate gRPC" true
+            sleep 2
+        fi
     fi
     
     # 清理可能存在的旧容器
@@ -232,24 +289,28 @@ weaviate_stop() {
 weaviate_schema() {
     echo -e "${BLUE}初始化 Weaviate Schema...${NC}"
     
+    # 确定要检查的 Weaviate URL
+    local CHECK_URL="${WEAVIATE_URL:-http://localhost:$WEAVIATE_HTTP_PORT}"
+    
     # 检查是否已就绪
-    local READY=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:$WEAVIATE_HTTP_PORT/v1/.well-known/ready" 2>/dev/null)
+    local READY=$(curl -s -o /dev/null -w "%{http_code}" "$CHECK_URL/v1/.well-known/ready" 2>/dev/null)
     if [ "$READY" != "200" ]; then
-        echo -e "  ${YELLOW}⚠ Weaviate 未就绪，跳过 Schema 初始化${NC}"
+        echo -e "  ${YELLOW}⚠ Weaviate ($CHECK_URL) 未就绪，跳过 Schema 初始化${NC}"
         return 1
     fi
     
     # 检查 Schema 是否已存在
-    local SCHEMA=$(curl -s "http://localhost:$WEAVIATE_HTTP_PORT/v1/schema" 2>/dev/null)
+    local SCHEMA=$(curl -s "$CHECK_URL/v1/schema" 2>/dev/null)
     if echo "$SCHEMA" | grep -q "SilkContext"; then
         echo -e "  ${GREEN}✓ Schema 已存在${NC}"
         return 0
     fi
     
-    # 运行 schema.py
+    # 运行 schema.py (会使用环境变量 WEAVIATE_URL)
     if [ -f "$SILK_DIR/search/schema.py" ]; then
         cd "$SILK_DIR/search"
-        python3 schema.py > /tmp/weaviate_schema.log 2>&1
+        # 传递 WEAVIATE_URL 给 schema.py
+        WEAVIATE_URL="$CHECK_URL" python3 schema.py > /tmp/weaviate_schema.log 2>&1
         if [ $? -eq 0 ]; then
             echo -e "  ${GREEN}✓ Schema 创建成功${NC}"
         else

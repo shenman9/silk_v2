@@ -14,16 +14,28 @@ import weaviate
 from weaviate.classes.config import Configure, Property, DataType, Tokenization
 import sys
 
-WEAVIATE_URL = "http://localhost:8008"
+import os
+
+# 支持环境变量配置，默认本地
+WEAVIATE_URL = os.environ.get("WEAVIATE_URL", "http://localhost:8008")
 
 
 def create_schema():
     """创建支持多用户隔离的 Schema"""
     
+    # 解析 WEAVIATE_URL
+    url = WEAVIATE_URL.replace("http://", "").replace("https://", "")
+    host = url.split(":")[0]
+    port = int(url.split(":")[1].split("/")[0]) if ":" in url else 8080
+    
+    # 检测是否是本地连接（用于 gRPC）
+    is_local = host in ["localhost", "127.0.0.1"]
+    grpc_port = 50051 if is_local else port + 1  # 远程通常使用相同端口或 +1
+    
     client = weaviate.connect_to_local(
-        host="localhost",
-        port=8008,
-        grpc_port=50051
+        host=host,
+        port=port,
+        grpc_port=grpc_port
     )
     
     try:
