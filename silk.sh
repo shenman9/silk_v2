@@ -16,8 +16,76 @@
 #   ./silk.sh weaviate - Weaviate 管理 (start/stop/status/schema)
 # ============================================================
 
-export JAVA_HOME=/usr/lib/jvm/java-17-openjdk
+
+# Java Home - 支持 macOS Homebrew 和 Linux
+if [ -d "/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home" ]; then
+    export JAVA_HOME="/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home"
+elif [ -d "/usr/lib/jvm/java-17-openjdk" ]; then
+    export JAVA_HOME=/usr/lib/jvm/java-17-openjdk
+else
+    export JAVA_HOME=$(dirname $(dirname $(readlink -f $(which java) 2>/dev/null || echo "/usr/bin/java") 2>/dev/null) 2>/dev/null)
+fi
 export PATH=$JAVA_HOME/bin:$PATH
+
+# Android SDK - 支持 macOS Homebrew、Linux 和 Android Studio
+if [ -d "/opt/homebrew/share/android-commandlinetools" ]; then
+    export ANDROID_HOME="/opt/homebrew/share/android-commandlinetools"
+elif [ -d "$HOME/Library/Android/sdk" ]; then
+    export ANDROID_HOME="$HOME/Library/Android/sdk"
+elif [ -d "/usr/lib/android-sdk" ]; then
+    export ANDROID_HOME=/usr/lib/android-sdk
+elif [ -d "/root/android-sdk" ]; then
+    export ANDROID_HOME=/root/android-sdk
+fi
+if [ -n "$ANDROID_HOME" ]; then
+    export PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH
+fi
+
+# AAPT2 架构自动检测与配置
+# ARM64 系统需要指定本地 ARM64 AAPT2，否则 Gradle 会下载 x86-64 版本导致无法执行
+setup_aapt2_for_arch() {
+    local CURRENT_ARCH=$(uname -m)
+    local LOCAL_PROPERTIES="$SILK_DIR/local.properties"
+    
+    # 只在 ARM64 系统上需要特殊处理
+    if [ "$CURRENT_ARCH" != "aarch64" ]; then
+        # 非 ARM64 系统，移除 override 配置（如果存在）
+        if grep -q "android.aapt2FromMavenOverride" "$LOCAL_PROPERTIES" 2>/dev/null; then
+            sed -i '/android.aapt2FromMavenOverride/d' "$LOCAL_PROPERTIES"
+        fi
+        return 0
+    fi
+    
+    # ARM64 系统：查找本地 ARM64 AAPT2
+    local ARM64_AAPT2=""
+    for build_tools_dir in "$ANDROID_HOME/build-tools"/*/; do
+        if [ -x "${build_tools_dir}aapt2" ]; then
+            local aapt2_arch=$(file "${build_tools_dir}aapt2" 2>/dev/null | grep -oP 'aarch64|ARM aarch64' | head -1)
+            if [ -n "$aapt2_arch" ]; then
+                ARM64_AAPT2="${build_tools_dir}aapt2"
+                break
+            fi
+        fi
+    done
+    
+    if [ -z "$ARM64_AAPT2" ]; then
+        echo -e "  ${YELLOW}⚠ ARM64 系统但未找到 ARM64 AAPT2，APK 构建可能失败${NC}"
+        return 1
+    fi
+    
+    # 写入 local.properties
+    if grep -q "android.aapt2FromMavenOverride" "$LOCAL_PROPERTIES" 2>/dev/null; then
+        sed -i "s|android.aapt2FromMavenOverride=.*|android.aapt2FromMavenOverride=$ARM64_AAPT2|" "$LOCAL_PROPERTIES"
+    else
+        echo "" >> "$LOCAL_PROPERTIES"
+        echo "# ARM64 aapt2 override - 自动检测" >> "$LOCAL_PROPERTIES"
+        echo "android.aapt2FromMavenOverride=$ARM64_AAPT2" >> "$LOCAL_PROPERTIES"
+    fi
+    
+    echo -e "  ${GREEN}✓ ARM64 系统已配置 AAPT2: $ARM64_AAPT2${NC}"
+}
+# 延迟执行 AAPT2 配置（在 SILK_DIR 定义之后）
+_SETUP_AAPT2_HOOK=true
 
 # 颜色定义
 RED='\033[0;31m'
@@ -33,9 +101,13 @@ SILK_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # 加载 .env（API Key、BACKEND_HOST 等，构建 APK 时会用到）
 if [ -f "$SILK_DIR/.env" ]; then
+    # 转换 CRLF 为 LF 并加载
+    TMP_ENV=$(mktemp)
+    tr -d '\r' < "$SILK_DIR/.env" > "$TMP_ENV"
     set -a
-    source <(sed 's/\r$//' "$SILK_DIR/.env")
+    source "$TMP_ENV"
     set +a
+    rm -f "$TMP_ENV"
 fi
 
 # 端口定义
@@ -44,6 +116,13 @@ FRONTEND_PORT=8005
 WEAVIATE_HTTP_PORT=8008
 WEAVIATE_GRPC_PORT=50051
 
+# Weaviate URL 处理：优先使用 .env 中的 WEAVIATE_URL，否则使用本地
+WEAVIATE_CHECK_URL="${WEAVIATE_URL:-http://localhost:$WEAVIATE_HTTP_PORT}"
+# 判断是否使用远程 Weaviate
+WEAVIATE_IS_REMOTE=false
+if [ -n "$WEAVIATE_URL" ] && [[ ! "$WEAVIATE_URL" =~ localhost|127\.0\.0\.1 ]]; then
+    WEAVIATE_IS_REMOTE=true
+fi
 # APK 输出目录
 APK_OUTPUT_DIR="$SILK_DIR/backend/static"
 
@@ -120,8 +199,14 @@ kill_all_ports() {
     
     kill_port_process $BACKEND_PORT "Silk Backend" $force
     kill_port_process $FRONTEND_PORT "Silk Frontend" $force
-    kill_port_process $WEAVIATE_HTTP_PORT "Weaviate HTTP" $force
-    kill_port_process $WEAVIATE_GRPC_PORT "Weaviate gRPC" $force
+    
+    # 使用远程 Weaviate 时跳过本地端口清理
+    if [ "$WEAVIATE_IS_REMOTE" != "true" ]; then
+        kill_port_process $WEAVIATE_HTTP_PORT "Weaviate HTTP" $force
+        kill_port_process $WEAVIATE_GRPC_PORT "Weaviate gRPC" $force
+    else
+        echo -e "  ${GREEN}✓ 使用远程 Weaviate，跳过本地端口清理${NC}"
+    fi
 }
 
 # ============================================================
@@ -161,14 +246,61 @@ weaviate_status() {
 weaviate_start() {
     echo -e "${BLUE}启动 Weaviate...${NC}"
     
-    # 检查是否已运行
-    if check_port $WEAVIATE_HTTP_PORT; then
-        echo -e "  ${YELLOW}Weaviate 已在运行${NC}"
-        return 0
+    # 检查 .env 中是否配置了远程 WEAVIATE_URL
+    if [ -n "$WEAVIATE_URL" ]; then
+        # 提取 host:port (去掉 http:// 前缀)
+        local WEAVIATE_ENDPOINT="${WEAVIATE_URL#http://}"
+        WEAVIATE_ENDPOINT="${WEAVIATE_ENDPOINT#https://}"
+        
+        # 检查远程 Weaviate 是否可用
+        local READY=$(curl -s -o /dev/null -w "%{http_code}" "$WEAVIATE_URL/v1/.well-known/ready" 2>/dev/null)
+        if [ "$READY" == "200" ]; then
+            echo -e "  ${GREEN}✓ 远程 Weaviate 已就绪: $WEAVIATE_URL${NC}"
+            return 0
+        else
+            echo -e "  ${YELLOW}⚠ 远程 Weaviate ($WEAVIATE_URL) 不可用 (HTTP $READY)${NC}"
+            echo -e "  ${YELLOW}  将启动本地 Weaviate...${NC}"
+        fi
     fi
     
-    # 清理可能存在的旧容器
-    docker rm -f silk-weaviate 2>/dev/null
+    # 首先检查 Docker 容器是否已存在且运行中
+    local CONTAINER_STATUS=$(docker inspect -f '{{.State.Status}}' silk-weaviate 2>/dev/null)
+    if [ "$CONTAINER_STATUS" == "running" ]; then
+        local READY=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:$WEAVIATE_HTTP_PORT/v1/.well-known/ready" 2>/dev/null)
+        if [ "$READY" == "200" ]; then
+            echo -e "  ${GREEN}✓ 本地 Weaviate 已就绪，跳过启动${NC}"
+            return 0
+        else
+            # 容器运行但未就绪（可能是端口转发问题），重启容器
+            echo -e "  ${YELLOW}⚠ Weaviate 容器运行中但未就绪，重启容器...${NC}"
+            docker restart silk-weaviate
+            # 等待就绪
+            for i in {1..15}; do
+                sleep 2
+                READY=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:$WEAVIATE_HTTP_PORT/v1/.well-known/ready" 2>/dev/null)
+                if [ "$READY" == "200" ]; then
+                    echo -e "  ${GREEN}✓ Weaviate 重启后已就绪！${NC}"
+                    weaviate_schema
+                    return 0
+                fi
+                echo -n "."
+            done
+            echo -e "  ${YELLOW}⚠ Weaviate 重启后仍未就绪，尝试重新创建容器${NC}"
+            docker rm -f silk-weaviate 2>/dev/null
+        fi
+    elif [ -n "$CONTAINER_STATUS" ]; then
+        # 容器存在但不是 running 状态（可能是 exited 等）
+        echo -e "  ${YELLOW}⚠ Weaviate 容器状态异常 ($CONTAINER_STATUS)，重新创建...${NC}"
+        docker rm -f silk-weaviate 2>/dev/null
+    else
+        # 检查端口是否被其他进程占用
+        if check_port $WEAVIATE_HTTP_PORT; then
+            echo -e "  ${YELLOW}⚠ 端口 $WEAVIATE_HTTP_PORT 被其他进程占用，尝试清理...${NC}"
+            kill_port_process $WEAVIATE_HTTP_PORT "Weaviate HTTP" true
+            kill_port_process $WEAVIATE_GRPC_PORT "Weaviate gRPC" true
+            sleep 2
+        fi
+    fi
     
     # 使用 Docker 直接启动 (避免 docker-compose 版本问题)
     if command -v docker &> /dev/null; then
@@ -232,24 +364,28 @@ weaviate_stop() {
 weaviate_schema() {
     echo -e "${BLUE}初始化 Weaviate Schema...${NC}"
     
+    # 确定要检查的 Weaviate URL
+    local CHECK_URL="${WEAVIATE_URL:-http://localhost:$WEAVIATE_HTTP_PORT}"
+    
     # 检查是否已就绪
-    local READY=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:$WEAVIATE_HTTP_PORT/v1/.well-known/ready" 2>/dev/null)
+    local READY=$(curl -s -o /dev/null -w "%{http_code}" "$CHECK_URL/v1/.well-known/ready" 2>/dev/null)
     if [ "$READY" != "200" ]; then
-        echo -e "  ${YELLOW}⚠ Weaviate 未就绪，跳过 Schema 初始化${NC}"
+        echo -e "  ${YELLOW}⚠ Weaviate ($CHECK_URL) 未就绪，跳过 Schema 初始化${NC}"
         return 1
     fi
     
     # 检查 Schema 是否已存在
-    local SCHEMA=$(curl -s "http://localhost:$WEAVIATE_HTTP_PORT/v1/schema" 2>/dev/null)
+    local SCHEMA=$(curl -s "$CHECK_URL/v1/schema" 2>/dev/null)
     if echo "$SCHEMA" | grep -q "SilkContext"; then
         echo -e "  ${GREEN}✓ Schema 已存在${NC}"
         return 0
     fi
     
-    # 运行 schema.py
+    # 运行 schema.py (会使用环境变量 WEAVIATE_URL)
     if [ -f "$SILK_DIR/search/schema.py" ]; then
         cd "$SILK_DIR/search"
-        python3 schema.py > /tmp/weaviate_schema.log 2>&1
+        # 传递 WEAVIATE_URL 给 schema.py
+        WEAVIATE_URL="$CHECK_URL" python3 schema.py > /tmp/weaviate_schema.log 2>&1
         if [ $? -eq 0 ]; then
             echo -e "  ${GREEN}✓ Schema 创建成功${NC}"
         else
@@ -369,11 +505,71 @@ build_frontend() {
 }
 
 # ============================================================
+# 清理架构不匹配的 AAPT2 缓存 (ARM64 服务器上可能缓存了 x86_64 的 AAPT2)
+# 并用本地 Android SDK 中的 ARM64 AAPT2 替换
+# ============================================================
+clean_aapt2_cache() {
+    local GRADLE_CACHES_DIR="$HOME/.gradle/caches"
+    local TRANSFORMS_DIR="$GRADLE_CACHES_DIR/transforms-3"
+    local CURRENT_ARCH=$(uname -m)
+    
+    # 只在 ARM64 系统上检查
+    if [ "$CURRENT_ARCH" != "aarch64" ]; then
+        return 0
+    fi
+    
+    if [ ! -d "$TRANSFORMS_DIR" ]; then
+        return 0
+    fi
+    
+    # 使用全局变量 AAPT2_OVERRIDE_PATH (由 setup_aapt2_override 设置)
+    local LOCAL_AAPT2="$AAPT2_OVERRIDE_PATH"
+    
+    # 如果全局变量未设置，尝试查找
+    if [ -z "$LOCAL_AAPT2" ] && [ -n "$ANDROID_HOME" ]; then
+        for build_tools_dir in "$ANDROID_HOME/build-tools"/*/; do
+            if [ -x "${build_tools_dir}aapt2" ]; then
+                local aapt2_arch=$(file "${build_tools_dir}aapt2" 2>/dev/null | grep -oP 'x86-64|aarch64|ARM aarch64' | head -1)
+                if [[ "$aapt2_arch" == "aarch64" || "$aapt2_arch" == "ARM aarch64" ]]; then
+                    LOCAL_AAPT2="${build_tools_dir}aapt2"
+                    break
+                fi
+            fi
+        done
+    fi
+    
+    # 替换所有 x86-64 的 AAPT2 为本地 ARM64 版本
+    local REPLACED=false
+    while IFS= read -r aapt2_file; do
+        if [ -x "$aapt2_file" ]; then
+            local aapt2_arch=$(file "$aapt2_file" 2>/dev/null | grep -oP 'x86-64|aarch64|ARM aarch64' | head -1)
+            if [ "$aapt2_arch" = "x86-64" ]; then
+                if [ -n "$LOCAL_AAPT2" ]; then
+                    echo -e "  ${YELLOW}替换 x86-64 AAPT2 -> ARM64: $(basename $(dirname $(dirname "$aapt2_file")))${NC}"
+                    /bin/cp -f "$LOCAL_AAPT2" "$aapt2_file"
+                    chmod +x "$aapt2_file"
+                    REPLACED=true
+                fi
+            fi
+        fi
+    done < <(find "$TRANSFORMS_DIR" -name "aapt2" -type f 2>/dev/null)
+    
+    if [ "$REPLACED" = "true" ]; then
+        echo -e "  ${GREEN}✓ 已替换架构不匹配的 AAPT2${NC}"
+    fi
+}
+
+# ============================================================
 # 构建 Android APK
 # ============================================================
 
 build_apk() {
     print_header "📱 构建 Android APK"
+    
+    # ARM64 系统需要配置 AAPT2 override
+    if [ "$_SETUP_AAPT2_HOOK" = "true" ]; then
+        setup_aapt2_for_arch
+    fi
     
     # 从 .env 取后端地址并传给 Gradle（避免 daemon 未继承环境变量）
     if [ -n "$BACKEND_BASE_URL" ]; then
@@ -430,6 +626,9 @@ build_apk() {
 
 build_all() {
     print_header "🔨 构建全部 (WebApp + APK)"
+    
+    # 清理架构不匹配的 AAPT2 缓存（在构建开始前清理，避免 daemon 缓存不一致）
+    clean_aapt2_cache
     
     # 1. 构建前端
     echo ""
@@ -803,6 +1002,11 @@ quick_restart() {
 # ============================================================
 # 主入口
 # ============================================================
+
+# 在需要构建 APK 时自动配置 AAPT2
+if [[ "$1" == "build-apk" || "$1" == "ba" || "$1" == "build-all" || "$1" == "bp" || "$1" == "deploy" || "$1" == "d" ]]; then
+    setup_aapt2_for_arch
+fi
 
 case "$1" in
     status|s)
