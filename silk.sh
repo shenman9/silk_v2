@@ -581,10 +581,25 @@ build_apk() {
     fi
     echo -e "  后端地址将注入 APK: ${CYAN}$APK_BACKEND_URL${NC}"
     
+    # ARM64 系统需要传递 AAPT2 override 参数（local.properties 设置不可靠）
+    AAPT2_OVERRIDE_PARAM=""
+    if [ "$(uname -m)" = "aarch64" ]; then
+        # 查找本地 ARM64 AAPT2
+        for build_tools_dir in "$ANDROID_HOME/build-tools"/*/; do
+            if [ -x "${build_tools_dir}aapt2" ]; then
+                local aapt2_arch=$(file "${build_tools_dir}aapt2" 2>/dev/null | grep -oP 'aarch64|ARM aarch64' | head -1)
+                if [ -n "$aapt2_arch" ]; then
+                    AAPT2_OVERRIDE_PARAM="-Pandroid.aapt2FromMavenOverride=${build_tools_dir}aapt2"
+                    break
+                fi
+            fi
+        done
+    fi
+    
     echo ""
     echo -e "${BLUE}正在构建 Android APK (Debug)...${NC}"
     cd "$SILK_DIR"
-    ./gradlew -PBACKEND_BASE_URL="$APK_BACKEND_URL" :frontend:androidApp:assembleDebug
+    ./gradlew -PBACKEND_BASE_URL="$APK_BACKEND_URL" $AAPT2_OVERRIDE_PARAM :frontend:androidApp:assembleDebug
     
     if [ $? -eq 0 ]; then
         # 找到生成的 APK
@@ -592,22 +607,40 @@ build_apk() {
         
         if [ -n "$APK_FILE" ]; then
             APK_SIZE=$(du -h "$APK_FILE" | cut -f1)
-            APK_NAME=$(basename "$APK_FILE")
+            
+            # 从生成的 BuildConfig.java 获取版本号
+            BUILD_CONFIG="$SILK_DIR/frontend/androidApp/build/generated/source/buildConfig/debug/com/silk/android/BuildConfig.java"
+            if [ -f "$BUILD_CONFIG" ]; then
+                APK_VERSION=$(grep "VERSION_NAME" "$BUILD_CONFIG" | grep -oP '"\K[^"]+' | head -1)
+            fi
+            # 如果无法获取版本号，使用时间戳
+            if [ -z "$APK_VERSION" ]; then
+                APK_VERSION=$(date +"%Y.%m%d.%H%M")
+            fi
+            
+            # 重命名为 silk-{version}.apk
+            APK_NAME="silk-${APK_VERSION}.apk"
             
             echo ""
             echo -e "${GREEN}✅ APK 构建成功${NC}"
             echo -e "  大小: $APK_SIZE"
+            echo -e "  版本: $APK_VERSION"
             echo -e "  路径: $APK_FILE"
             
-            # 复制到 backend/static 目录供下载
+            # 复制到 backend/static 目录供下载，重命名为 silk-{version}.apk
             echo ""
             echo -e "${BLUE}复制到 backend/static 目录供下载...${NC}"
             cp "$APK_FILE" "$APK_OUTPUT_DIR/$APK_NAME"
             echo -e "${GREEN}✅ 已复制到: $APK_OUTPUT_DIR/$APK_NAME${NC}"
             
-            # 创建符号链接 silk.apk
+            # 创建符号链接 silk.apk 指向最新版本
             ln -sf "$APK_OUTPUT_DIR/$APK_NAME" "$APK_OUTPUT_DIR/silk.apk"
             echo -e "${GREEN}✅ 已创建链接: $APK_OUTPUT_DIR/silk.apk${NC}"
+            
+            # 同时更新 static/files/androidApp-debug.apk 供后端路由查找
+            mkdir -p "$APK_OUTPUT_DIR/files"
+            cp "$APK_FILE" "$APK_OUTPUT_DIR/files/androidApp-debug.apk"
+            echo -e "${GREEN}✅ 已更新: $APK_OUTPUT_DIR/files/androidApp-debug.apk${NC}"
         else
             echo ""
             echo -e "${RED}❌ 未找到生成的 APK 文件${NC}"

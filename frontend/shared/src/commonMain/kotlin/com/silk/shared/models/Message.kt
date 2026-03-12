@@ -19,7 +19,7 @@ data class Message(
 
 @Serializable
 enum class MessageType {
-    TEXT, JOIN, LEAVE, SYSTEM
+    TEXT, JOIN, LEAVE, SYSTEM, FILE
 }
 
 @Serializable

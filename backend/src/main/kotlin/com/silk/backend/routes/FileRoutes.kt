@@ -134,6 +134,10 @@ fun Route.fileRoutes() {
                 
                 logger.info("📁 文件已保存: ${targetFile.absolutePath}")
                 
+                // 获取用户名（用于显示在聊天消息中）
+                val user = com.silk.backend.database.UserRepository.findUserById(userId!!)
+                val userName = user?.fullName ?: "用户"
+                
                 // 先返回上传成功响应（不阻塞用户）
                 call.respond(HttpStatusCode.OK, FileUploadResponse(
                     success = true,
@@ -146,12 +150,26 @@ fun Route.fileRoutes() {
                     message = "文件已上传，正在索引..."
                 ))
                 
-                // 异步索引到搜索系统（不阻塞用户对话）
+                // ✅ 发送文件消息到聊天室（让所有群成员都能看到）
                 val finalSessionId = sessionId!!
                 val finalUserId = userId!!
+                val finalUserName = userName
                 val finalFileName = fileName!!
+                val finalSafeFileName = safeFileName
+                val fileSize = fileBytes!!.size.toLong()
+                
                 CoroutineScope(Dispatchers.IO).launch {
                     try {
+                        // 广播文件消息到聊天室
+                        com.silk.backend.broadcastFileMessage(
+                            groupId = finalSessionId,
+                            userId = finalUserId,
+                            userName = finalUserName,
+                            fileName = finalFileName,
+                            fileSize = fileSize,
+                            downloadUrl = "/api/files/download/$finalSessionId/$finalSafeFileName"
+                        )
+                        
                         // 发送开始索引状态
                         broadcastSystemStatus(finalSessionId, "🔄 正在索引文件: $finalFileName ...")
                         
@@ -231,7 +249,7 @@ fun Route.fileRoutes() {
         get("/app-version") {
             // APK 文件路径 - 按优先级查找
             val possiblePaths = listOf(
-                "static/files/androidApp-debug.apk",           // silk.sh 复制的位置
+                "static/silk.apk",                              // silk.sh 创建的符号链接（最新版本）
                 "static/downloads/Silk-Android.apk",           // 已部署的稳定版本
                 "../frontend/androidApp/build/outputs/apk/debug/androidApp-debug.apk",  // 构建目录
                 "frontend/androidApp/build/outputs/apk/debug/androidApp-debug.apk"
@@ -276,13 +294,13 @@ fun Route.fileRoutes() {
          * 优先从 static/downloads 目录读取稳定版本
          */
         get("/download-apk") {
-            // APK 文件路径 - 优先使用已部署的稳定版本
+            // APK 文件路径 - 优先使用 silk-{version}.apk 或 silk.apk
             val possiblePaths = listOf(
-                "static/downloads/Silk-Android.apk",  // 已部署的稳定版本（优先）
-                "/root/Silk/backend/static/downloads/Silk-Android.apk",  // 绝对路径
-                "../frontend/androidApp/build/outputs/apk/debug/androidApp-debug.apk",  // 构建目录（备用）
-                "frontend/androidApp/build/outputs/apk/debug/androidApp-debug.apk",
-                "/root/Silk/frontend/androidApp/build/outputs/apk/debug/androidApp-debug.apk"
+                "static/silk.apk",                               // 符号链接指向最新版本（优先）
+                "static/downloads/Silk-Android.apk",             // 已部署的稳定版本
+                "static/silk-*.apk",                             // silk-{version}.apk 通配符
+                "../frontend/androidApp/build/outputs/apk/debug/*.apk",  // 构建目录（备用）
+                "frontend/androidApp/build/outputs/apk/debug/*.apk"
             )
             
             val apkFile = possiblePaths

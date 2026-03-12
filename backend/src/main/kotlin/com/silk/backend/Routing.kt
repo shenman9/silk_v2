@@ -45,6 +45,35 @@ suspend fun broadcastSystemStatus(groupId: String, status: String) {
     }
 }
 
+/**
+ * 广播文件消息到指定群组 - 供 FileRoutes 使用
+ * 当用户上传文件后，在聊天中显示文件消息
+ */
+suspend fun broadcastFileMessage(
+    groupId: String,
+    userId: String,
+    userName: String,
+    fileName: String,
+    fileSize: Long,
+    downloadUrl: String
+) {
+    val chatServer = groupChatServers[groupId]
+    if (chatServer != null) {
+        val message = Message(
+            id = System.currentTimeMillis().toString() + (0..999).random(),
+            userId = userId,
+            userName = userName,
+            content = """{"fileName":"$fileName","fileSize":$fileSize,"downloadUrl":"$downloadUrl"}""",
+            timestamp = System.currentTimeMillis(),
+            type = MessageType.FILE
+        )
+        chatServer.broadcast(message)
+        println("📎 [broadcastFileMessage] 文件消息已广播到群组 $groupId: $fileName")
+    } else {
+        println("⚠️ [broadcastFileMessage] 群组 $groupId 不存在")
+    }
+}
+
 fun Application.configureRouting() {
     routing {
         get("/") {

@@ -59,6 +59,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.text.SimpleDateFormat
 import java.util.*
+import org.json.JSONObject
 
 // Web版的 collectAsState 实现
 @Composable
@@ -1498,12 +1499,139 @@ fun MessageItem(
 ) {
     val isCurrentUser = message.userId == currentUserId
     val isSystemMessage = message.type == MessageType.SYSTEM
+    val isFileMessage = message.type == MessageType.FILE
     
     val dateFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
     val timeString = dateFormat.format(Date(message.timestamp))
     
     // 检测PDF下载链接
     val isPdfMessage = message.content.contains("/download/report/") && message.content.contains(".pdf")
+    
+    // ✅ 文件消息特殊处理
+    if (isFileMessage) {
+        // 解析文件信息：content 格式为 JSON {"fileName":"xxx","fileSize":123,"downloadUrl":"xxx"}
+        // 兼容旧格式 "fileName|fileSize|downloadUrl"
+        val fileName: String
+        val fileSize: Long
+        val downloadUrl: String
+        
+        if (message.content.startsWith("{")) {
+            // JSON 格式
+            val json = try {
+                org.json.JSONObject(message.content)
+            } catch (e: Exception) {
+                println("⚠️ 解析文件消息JSON失败: ${e.message}")
+                null
+            }
+            if (json != null) {
+                fileName = json.optString("fileName", "未知文件")
+                fileSize = json.optLong("fileSize", 0L)
+                downloadUrl = json.optString("downloadUrl", "")
+            } else {
+                fileName = "解析失败"
+                fileSize = 0L
+                downloadUrl = ""
+            }
+        } else {
+            // 兼容旧的 | 分隔符格式
+            val parts = message.content.split("|")
+            fileName = parts.getOrNull(0) ?: "未知文件"
+            fileSize = parts.getOrNull(1)?.toLongOrNull() ?: 0L
+            downloadUrl = parts.getOrNull(2) ?: ""
+        }
+        
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalAlignment = if (isCurrentUser) Alignment.End else Alignment.Start
+        ) {
+            // 发送者名称和时间
+            if (!isCurrentUser) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(horizontal = 4.dp)
+                ) {
+                    Text(
+                        text = message.userName,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = " · $timeString",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+            }
+            
+            // 文件卡片
+            Surface(
+                color = if (isCurrentUser) MaterialTheme.colorScheme.primary 
+                        else MaterialTheme.colorScheme.surfaceVariant,
+                shape = MaterialTheme.shapes.medium,
+                tonalElevation = 1.dp,
+                modifier = Modifier.clickable {
+                    if (downloadUrl.isNotEmpty()) {
+                        val fullUrl = "${BackendUrlHolder.getBaseUrl()}$downloadUrl"
+                        println("📥 点击打开文件: $fileName, URL: $fullUrl")
+                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(fullUrl))
+                        context.startActivity(intent)
+                    }
+                }
+            ) {
+                Row(
+                    modifier = Modifier.padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // 文件图标
+                    val icon = when (fileName.substringAfterLast(".").lowercase()) {
+                        "pdf" -> "📄"
+                        "doc", "docx" -> "📝"
+                        "xls", "xlsx" -> "📊"
+                        "jpg", "jpeg", "png", "gif" -> "🖼️"
+                        "mp4", "avi", "mov" -> "🎬"
+                        "mp3", "wav" -> "🎵"
+                        "zip", "rar" -> "📦"
+                        else -> "📎"
+                    }
+                    Text(
+                        text = icon,
+                        fontSize = 32.sp,
+                        modifier = Modifier.padding(end = 12.dp)
+                    )
+                    
+                    Column {
+                        Text(
+                            text = fileName,
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium,
+                            color = if (isCurrentUser) MaterialTheme.colorScheme.onPrimary 
+                                    else MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = if (fileSize > 0) formatFileSize(fileSize) else "点击查看",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (isCurrentUser) MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.7f)
+                                    else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+            
+            // 当前用户消息的时间
+            if (isCurrentUser) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = timeString,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 4.dp)
+                )
+            }
+        }
+        return
+    }
     
     if (isSystemMessage) {
         // 系统消息

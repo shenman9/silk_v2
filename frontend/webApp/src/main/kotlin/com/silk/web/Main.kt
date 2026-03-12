@@ -13,6 +13,10 @@ import kotlinx.coroutines.launch
 import kotlinx.browser.window
 import kotlinx.browser.document
 import kotlin.random.Random
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
 
 // 文件信息数据类
 data class FileInfo(
@@ -2133,6 +2137,174 @@ fun MessageItem(message: Message, isTransient: Boolean = false) {
                     } else {
                         // 普通文本消息
                         Text(message.content)
+                    }
+                }
+            }
+        }
+        MessageType.FILE -> {
+            // 文件消息 - 显示文件卡片，点击可下载
+            // 解析文件信息 JSON
+            val fileInfoJson = message.content
+            var fileName by remember { mutableStateOf("") }
+            var fileSize by remember { mutableStateOf(0L) }
+            var downloadUrl by remember { mutableStateOf("") }
+            var fileExt by remember { mutableStateOf("") }
+            
+            // 解析 JSON
+            try {
+                val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+                val obj = json.parseToJsonElement(fileInfoJson) as kotlinx.serialization.json.JsonObject
+                fileName = obj["fileName"]?.jsonPrimitive?.content ?: "未知文件"
+                fileSize = obj["fileSize"]?.jsonPrimitive?.longOrNull ?: 0L
+                downloadUrl = obj["downloadUrl"]?.jsonPrimitive?.content ?: ""
+                fileExt = fileName.substringAfterLast(".", "").uppercase()
+            } catch (e: Exception) {
+                console.error("解析文件信息失败:", e)
+                fileName = "文件"
+                downloadUrl = ""
+            }
+            
+            // 文件图标
+            val fileIcon = when (fileExt.lowercase()) {
+                "pdf" -> "📄"
+                "doc", "docx" -> "📝"
+                "xls", "xlsx" -> "📊"
+                "ppt", "pptx" -> "📽"
+                "jpg", "jpeg", "png", "gif", "webp" -> "🖼"
+                "mp3", "wav", "ogg" -> "🎵"
+                "mp4", "avi", "mov", "mkv" -> "🎬"
+                "zip", "rar", "7z", "tar", "gz" -> "📦"
+                "txt", "md", "log" -> "📃"
+                "json", "xml", "yaml", "yml" -> "⚙"
+                else -> "📎"
+            }
+            
+            // 格式化文件大小
+            fun formatFileSize(size: Long): String {
+                val kb = 1024.0
+                val mb = kb * 1024
+                val gb = mb * 1024
+                return when {
+                    size < 1024 -> "$size B"
+                    size < mb -> "${(size / kb * 10).toInt() / 10.0} KB"
+                    size < gb -> "${(size / mb * 10).toInt() / 10.0} MB"
+                    else -> "${(size / gb * 10).toInt() / 10.0} GB"
+                }
+            }
+            val fileSizeStr = formatFileSize(fileSize)
+            
+            Div({ classes(SilkStylesheet.messageCard) }) {
+                Div({ classes(SilkStylesheet.messageHeader) }) {
+                    Span({ classes(SilkStylesheet.userName) }) {
+                        Text(message.userName)
+                    }
+                    Span({ classes(SilkStylesheet.timestamp) }) {
+                        Text(timeString)
+                    }
+                }
+                
+                // 文件卡片
+                Div({
+                    style {
+                        display(DisplayStyle.Flex)
+                        alignItems(AlignItems.Center)
+                        property("gap", "12px")
+                        padding(12.px)
+                        backgroundColor(Color(SilkColors.surfaceElevated))
+                        borderRadius(8.px)
+                        property("border", "1px solid ${SilkColors.border}")
+                        property("cursor", "pointer")
+                        property("transition", "all 0.2s ease")
+                    }
+                    onClick {
+                        if (downloadUrl.isNotEmpty()) {
+                            val baseUrl = js("window.location.protocol + '//' + window.location.hostname") as String
+                            val port = "8006"
+                            val fullUrl = "$baseUrl:$port$downloadUrl"
+                            console.log("打开文件下载: $fullUrl")
+                            
+                            // 使用 fetch 下载文件
+                            val window = js("window")
+                            val document = js("document")
+                            
+                            window.fetch(fullUrl)
+                                .then({ response: dynamic ->
+                                    if (!response.ok) {
+                                        throw js("Error('下载失败: ' + response.status)")
+                                    }
+                                    response.blob()
+                                })
+                                .then({ blob: dynamic ->
+                                    val url = window.URL.createObjectURL(blob)
+                                    val a = document.createElement("a")
+                                    a.style.display = "none"
+                                    a.href = url
+                                    a.download = fileName
+                                    document.body.appendChild(a)
+                                    a.click()
+                                    window.URL.revokeObjectURL(url)
+                                    document.body.removeChild(a)
+                                    console.log("文件下载成功")
+                                })
+                                .catch({ error: dynamic ->
+                                    console.error("下载文件失败:", error)
+                                    window.alert("下载失败: " + error.message)
+                                })
+                        }
+                    }
+                }) {
+                    // 文件图标
+                    Div({
+                        style {
+                            fontSize(32.px)
+                            padding(8.px)
+                            backgroundColor(Color(SilkColors.secondary))
+                            borderRadius(8.px)
+                        }
+                    }) {
+                        Text(fileIcon)
+                    }
+                    
+                    // 文件信息
+                    Div({
+                        style {
+                            display(DisplayStyle.Flex)
+                            flexDirection(FlexDirection.Column)
+                            property("gap", "4px")
+                        }
+                    }) {
+                        Div({
+                            style {
+                                fontSize(14.px)
+                                fontWeight("600")
+                                color(Color(SilkColors.textPrimary))
+                                property("max-width", "200px")
+                                property("overflow", "hidden")
+                                property("text-overflow", "ellipsis")
+                                property("white-space", "nowrap")
+                            }
+                        }) {
+                            Text(fileName)
+                        }
+                        Div({
+                            style {
+                                fontSize(12.px)
+                                color(Color(SilkColors.textSecondary))
+                            }
+                        }) {
+                            Text("$fileSizeStr • $fileExt")
+                        }
+                    }
+                    
+                    // 下载按钮
+                    Div({
+                        style {
+                            marginLeft(8.px)
+                            fontSize(18.px)
+                            color(Color(SilkColors.primary))
+                        }
+                    }) {
+                        Text("⬇")
                     }
                 }
             }
