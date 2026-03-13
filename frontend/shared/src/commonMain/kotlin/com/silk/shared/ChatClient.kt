@@ -96,6 +96,16 @@ class ChatClient(
             log("✅ [ChatClient] 解析成功: ${message.type}, 用户: ${message.userName}, category: ${message.category}")
             
             when {
+                // 撤回消息：从列表中移除指定消息
+                message.type == MessageType.RECALL -> {
+                    log("🗑️ [ChatClient] 收到撤回消息: ${message.content}")
+                    // content 包含要撤回的消息ID，可能是多个ID（用逗号分隔）
+                    val messageIdsToRemove = message.content.split(",").map { it.trim() }
+                    _messages.value = _messages.value.filter { msg -> 
+                        msg.id !in messageIdsToRemove 
+                    }
+                    log("🗑️ [ChatClient] 已移除 ${messageIdsToRemove.size} 条消息")
+                }
                 // Agent 状态消息：添加到状态消息列表（灰色显示）
                 message.category == MessageCategory.AGENT_STATUS -> {
                     // 特殊处理：如果内容以 "CLEAR_STATUS" 开头，清空状态列表
@@ -112,8 +122,8 @@ class ChatClient(
                 message.isTransient && message.isIncremental -> {
                     log("📝 [ChatClient] 增量临时消息")
                     val existing = _transientMessage.value
-                    if (existing != null && 
-                        existing.userId == message.userId && 
+                    if (existing != null &&
+                        existing.userId == message.userId &&
                         existing.type == message.type) {
                         _transientMessage.value = existing.copy(
                             content = existing.content + message.content,

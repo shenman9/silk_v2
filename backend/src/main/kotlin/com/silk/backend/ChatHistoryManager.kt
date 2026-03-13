@@ -233,6 +233,98 @@ class ChatHistoryManager(
     }
     
     /**
+     * 删除单条消息
+     * @param sessionName 会话名称
+     * @param messageId 要删除的消息ID
+     * @return 是否删除成功
+     */
+    fun deleteMessage(sessionName: String, messageId: String): Boolean {
+        val chatHistory = loadChatHistory(sessionName) ?: return false
+        
+        val initialSize = chatHistory.messages.size
+        chatHistory.messages.removeIf { it.messageId == messageId }
+        
+        if (chatHistory.messages.size < initialSize) {
+            saveChatHistory(sessionName, chatHistory)
+            println("🗑️ 消息已删除: $messageId (会话: $sessionName)")
+            return true
+        }
+        
+        return false
+    }
+    
+    /**
+     * 批量删除消息
+     * @param sessionName 会话名称
+     * @param messageIds 要删除的消息ID列表
+     * @return 删除的消息数量
+     */
+    fun deleteMessages(sessionName: String, messageIds: List<String>): Int {
+        if (messageIds.isEmpty()) return 0
+        
+        val chatHistory = loadChatHistory(sessionName) ?: return 0
+        
+        val initialSize = chatHistory.messages.size
+        chatHistory.messages.removeIf { it.messageId in messageIds }
+        val deletedCount = initialSize - chatHistory.messages.size
+        
+        if (deletedCount > 0) {
+            saveChatHistory(sessionName, chatHistory)
+            println("🗑️ 批量删除消息: $deletedCount 条 (会话: $sessionName)")
+        }
+        
+        return deletedCount
+    }
+    
+    /**
+     * 查找指定消息后的AI回复消息
+     * 用于撤回 @silk 消息时，同时删除AI的回复
+     * @param sessionName 会话名称
+     * @param userMessageId 用户消息ID
+     * @return AI回复消息的ID列表（可能有多条，如步骤消息和最终回复）
+     */
+    fun findAgentRepliesAfterMessage(sessionName: String, userMessageId: String): List<String> {
+        val chatHistory = loadChatHistory(sessionName) ?: return emptyList()
+        
+        // 找到用户消息的位置
+        val userMessageIndex = chatHistory.messages.indexOfFirst { it.messageId == userMessageId }
+        if (userMessageIndex == -1) return emptyList()
+        
+        val userMessage = chatHistory.messages[userMessageIndex]
+        val userTimestamp = userMessage.timestamp
+        
+        // AI Agent ID
+        val agentId = "silk_agent"
+        
+        // 查找用户消息之后、连续的AI回复消息
+        val agentReplies = mutableListOf<String>()
+        var foundNextUserMessage = false
+        
+        for (i in (userMessageIndex + 1) until chatHistory.messages.size) {
+            val msg = chatHistory.messages[i]
+            
+            // 如果遇到其他用户的消息，停止查找
+            if (msg.senderId != agentId && msg.senderId != userMessage.senderId) {
+                break
+            }
+            
+            // 如果是AI的回复，添加到列表
+            if (msg.senderId == agentId) {
+                // 检查是否是连续的AI回复（时间间隔在5分钟内）
+                val prevMsg = if (agentReplies.isEmpty()) userMessage else chatHistory.messages[i - 1]
+                if (msg.timestamp - prevMsg.timestamp < 5 * 60 * 1000) {
+                    agentReplies.add(msg.messageId)
+                } else {
+                    break
+                }
+            }
+        }
+        
+        println("🔍 查找AI回复: 用户消息 $userMessageId -> 找到 ${agentReplies.size} 条AI回复")
+        return agentReplies
+    }
+    
+    /**
      * 生成会话 ID
      */
     private fun generateSessionId(): String {

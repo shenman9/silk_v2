@@ -356,3 +356,25 @@ data class UserSettingsResponse(
     val message: String,
     val settings: UserSettings? = null
 )
+
+// ==================== 消息撤回相关模型 ====================
+
+/**
+ * 撤回消息请求
+ */
+@Serializable
+data class RecallMessageRequest(
+    val groupId: String,
+    val messageId: String,
+    val userId: String  // 撤回操作者
+)
+
+/**
+ * 撤回消息响应
+ */
+@Serializable
+data class RecallMessageResponse(
+    val success: Boolean,
+    val message: String,
+    val recalledMessageIds: List<String> = emptyList()  // 被撤回的消息ID列表（可能包含用户消息和AI回复）
+)

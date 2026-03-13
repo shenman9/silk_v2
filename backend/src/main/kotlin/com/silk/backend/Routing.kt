@@ -991,6 +991,40 @@ fun Application.configureRouting() {
             }
         }
         
+        // ==================== 消息撤回 API ====================
+        post("/api/messages/recall") {
+            try {
+                val request = call.receive<RecallMessageRequest>()
+                
+                // 检查群组是否存在
+                val group = GroupRepository.findGroupById(request.groupId)
+                if (group == null) {
+                    call.respond(SimpleResponse(false, "群组不存在"))
+                    return@post
+                }
+                
+                // 获取群组的 ChatServer 并撤回消息
+                val groupChatServer = getGroupChatServer(request.groupId)
+                
+                // 撤回消息
+                val result = groupChatServer.recallMessage(
+                    messageId = request.messageId,
+                    userId = request.userId
+                )
+                
+                if (result.success) {
+                    println("🗑️ 消息已撤回: ${request.messageId} by ${request.userId}")
+                    call.respond(SimpleResponse(true, result.message))
+                } else {
+                    call.respond(SimpleResponse(false, result.message))
+                }
+            } catch (e: Exception) {
+                println("❌ 撤回消息失败: ${e.message}")
+                e.printStackTrace()
+                call.respond(HttpStatusCode.BadRequest, SimpleResponse(false, "撤回失败: ${e.message}"))
+            }
+        }
+        
         webSocket("/chat") {
             val userId = call.parameters["userId"] ?: UUID.randomUUID().toString()
             val userName = call.parameters["userName"] ?: "User_${userId.take(6)}"

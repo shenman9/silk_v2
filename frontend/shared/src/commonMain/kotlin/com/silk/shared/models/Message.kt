@@ -19,7 +19,7 @@ data class Message(
 
 @Serializable
 enum class MessageType {
-    TEXT, JOIN, LEAVE, SYSTEM, FILE
+    TEXT, JOIN, LEAVE, SYSTEM, FILE, RECALL  // RECALL: 消息撤回
 }
 
 @Serializable

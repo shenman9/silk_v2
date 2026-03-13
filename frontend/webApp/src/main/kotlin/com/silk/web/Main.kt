@@ -332,8 +332,8 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
     val wsUrl = remember {
         val protocol = if (window.location.protocol == "https:") "wss:" else "ws:"
         val host = window.location.hostname
-        // 始终使用后端端口 8006
-        val url = "$protocol//$host:8006"
+        // 始终使用后端端口 8003 (silk-fork)
+        val url = "$protocol//$host:8003"
         console.log("🔌 WebSocket URL: $url")
         url
     }
@@ -374,6 +374,33 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
     var showMentionMenu by remember { mutableStateOf(false) }
     var mentionSearchText by remember { mutableStateOf("") }
     var mentionStartIndex by remember { mutableStateOf(-1) }
+    
+    // 消息撤回相关状态
+    var showRecallConfirm by remember { mutableStateOf<String?>(null) } // 要撤回的消息ID
+    var isRecalling by remember { mutableStateOf(false) }
+    
+    // 撤回消息的处理函数
+    val handleRecallMessage: (String) -> Unit = { messageId ->
+        scope.launch {
+            isRecalling = true
+            try {
+                val response = ApiClient.recallMessage(group.id, user.id, messageId)
+                if (response.success) {
+                    console.log("✅ 消息撤回成功: $messageId")
+                    // ChatClient 会通过 WebSocket 收到撤回通知并自动处理
+                } else {
+                    console.error("❌ 消息撤回失败: ${response.message}")
+                    window.alert("撤回失败: ${response.message}")
+                }
+            } catch (e: Exception) {
+                console.error("❌ 撤回消息异常:", e)
+                window.alert("撤回失败: ${e.message}")
+            } finally {
+                isRecalling = false
+                showRecallConfirm = null
+            }
+        }
+    }
     
     // 从消息历史中提取用户列表（去重）
     val sessionUsers = remember(messages) {
@@ -683,7 +710,27 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
         }) {
             // 显示所有普通消息
             messages.forEach { message ->
-                MessageItem(message, isTransient = false)
+                MessageItem(
+                    message = message,
+                    isTransient = false,
+                    currentUserId = user.id,
+                    groupId = group.id,
+                    onRecall = { messageId ->
+                        scope.launch {
+                            try {
+                                val response = ApiClient.recallMessage(group.id, messageId, user.id)
+                                if (response.success) {
+                                    console.log("✅ 消息撤回成功")
+                                } else {
+                                    window.alert("撤回失败: ${response.message}")
+                                }
+                            } catch (e: Exception) {
+                                console.error("❌ 撤回消息失败:", e)
+                                window.alert("撤回失败: ${e.message}")
+                            }
+                        }
+                    }
+                )
             }
             
             // 显示系统状态消息（灰色）
@@ -1976,10 +2023,22 @@ fun FolderExplorerDialog(
 }
 
 @Composable
-fun MessageItem(message: Message, isTransient: Boolean = false) {
+fun MessageItem(
+    message: Message, 
+    isTransient: Boolean = false,
+    currentUserId: String = "",
+    groupId: String = "",
+    onRecall: (String) -> Unit = {}
+) {
     val timeString = remember(message.timestamp) {
         formatTime(message.timestamp)
     }
+    
+    // 是否可以撤回：只能撤回自己发送的消息，且不是 Silk 的消息
+    val canRecall = message.userId == currentUserId && 
+                    message.userId != "silk_ai_agent" && 
+                    message.type == MessageType.TEXT &&
+                    !isTransient
     
     // Agent 状态消息 - 灰色样式
     if (message.category == com.silk.shared.models.MessageCategory.AGENT_STATUS) {
@@ -2012,6 +2071,27 @@ fun MessageItem(message: Message, isTransient: Boolean = false) {
                     }
                     Span({ classes(SilkStylesheet.timestamp) }) {
                         Text(timeString)
+                    }
+                    // 撤回按钮 - 仅对自己的消息显示
+                    if (canRecall) {
+                        Span({
+                            style {
+                                marginLeft(8.px)
+                                fontSize(11.px)
+                                color(Color(SilkColors.textLight))
+                                property("cursor", "pointer")
+                                property("opacity", "0.6")
+                                property("transition", "opacity 0.2s")
+                                property("text-decoration", "underline")
+                            }
+                            onClick {
+                                if (window.confirm("确定要撤回这条消息吗？")) {
+                                    onRecall(message.id)
+                                }
+                            }
+                        }) {
+                            Text("撤回")
+                        }
                     }
                 }
                 Div({
@@ -2313,6 +2393,10 @@ fun MessageItem(message: Message, isTransient: Boolean = false) {
             Div({ classes(SilkStylesheet.systemMessage) }) {
                 Text("• ${message.content} ($timeString)")
             }
+        }
+        MessageType.RECALL -> {
+            // 撤回消息通知 - 不显示在消息列表中
+            // 客户端通过 ChatClient 自动处理撤回，这里不需要显示
         }
     }
 }

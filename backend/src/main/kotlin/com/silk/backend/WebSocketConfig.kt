@@ -32,7 +32,7 @@ data class Message(
 
 @Serializable
 enum class MessageType {
-    TEXT, JOIN, LEAVE, SYSTEM, FILE
+    TEXT, JOIN, LEAVE, SYSTEM, FILE, RECALL
 }
 
 @Serializable
@@ -84,6 +84,31 @@ class ChatServer(
                 println("📋 已从缓存恢复 ${processedUrls.size} 个已处理的URL")
             } catch (e: Exception) {
                 println("⚠️ 读取URL缓存失败: ${e.message}")
+        }
+        
+        // ✅ 从持久化存储加载历史消息到内存（用于消息撤回等功能）
+        try {
+            val chatHistory = historyManager.loadChatHistory(sessionName)
+            if (chatHistory != null && chatHistory.messages.isNotEmpty()) {
+                chatHistory.messages.forEach { entry ->
+                    val msg = Message(
+                        id = entry.messageId,
+                        userId = entry.senderId,
+                        userName = entry.senderName,
+                        content = entry.content,
+                        timestamp = entry.timestamp,
+                        type = try {
+                            MessageType.valueOf(entry.messageType)
+                        } catch (e: Exception) {
+                            MessageType.TEXT
+                        }
+                    )
+                    messageHistory.add(msg)
+                }
+                println("📜 已从持久化加载 ${messageHistory.size} 条历史消息到内存 (session: $sessionName)")
+            }
+        } catch (e: Exception) {
+            println("⚠️ 加载历史消息到内存失败: ${e.message}")
             }
         }
     }
@@ -940,10 +965,122 @@ class ChatServer(
         }
     }
     
+    /**
+     * 撤回消息
+     * @param messageId 要撤回的消息ID
+     * @param userId 发起撤回的用户ID
+     * @return 撤回结果：成功/失败，以及被删除的消息ID列表
+     */
+    suspend fun recallMessage(messageId: String, userId: String): RecallResult {
+        println("🔄 [recallMessage] 开始撤回消息: $messageId by user $userId")
+        println("🔄 [recallMessage] sessionName: $sessionName")
+        
+        // 1. 从历史记录中查找消息
+        val chatHistory = historyManager.loadChatHistory(sessionName)
+        println("🔄 [recallMessage] chatHistory: ${chatHistory != null}, messages count: ${chatHistory?.messages?.size}")
+        if (chatHistory != null) {
+            println("🔄 [recallMessage] message IDs in history: ${chatHistory.messages.map { it.messageId }}")
+        }
+        val messageEntry = chatHistory?.messages?.find { it.messageId == messageId }
+        
+        if (messageEntry == null) {
+            println("❌ [recallMessage] 消息不存在: $messageId")
+            return RecallResult(false, "消息不存在", emptyList())
+        }
+        
+        // 2. 验证权限：只有消息发送者才能撤回
+        if (messageEntry.senderId != userId) {
+            println("❌ [recallMessage] 无权撤回此消息: sender=${messageEntry.senderId}, requester=$userId")
+            return RecallResult(false, "只能撤回自己发送的消息", emptyList())
+        }
+        
+        val deletedMessageIds = mutableListOf<String>()
+        
+        // 3. 检查是否是 @silk 消息
+        val isSilkMessage = messageEntry.content.startsWith("@Silk") || messageEntry.content.startsWith("@silk")
+        
+        if (isSilkMessage) {
+            println("🔄 [recallMessage] 检测到 @silk 消息，查找 Silk 的回复")
+            
+            // 4. 查找 Silk 的回复消息（在用户消息之后，最近的 Silk 消息）
+            val messageIndex = chatHistory.messages.indexOf(messageEntry)
+            val silkReply = chatHistory.messages
+                .drop(messageIndex + 1)
+                .firstOrNull { it.senderId == SilkAgent.AGENT_ID }
+            
+            if (silkReply != null) {
+                println("🔄 [recallMessage] 找到 Silk 回复: ${silkReply.messageId}")
+                
+                // 5. 删除用户消息和 Silk 回复
+                historyManager.deleteMessages(sessionName, listOf(messageId, silkReply.messageId))
+                deletedMessageIds.add(messageId)
+                deletedMessageIds.add(silkReply.messageId)
+                
+                // 6. 从内存历史中移除
+                messageHistory.removeIf { it.id == messageId || it.id == silkReply.messageId }
+                
+                // 7. 广播撤回通知
+                broadcastRecallNotification(listOf(messageId, silkReply.messageId))
+                
+                println("✅ [recallMessage] 已撤回用户消息和 Silk 回复")
+            } else {
+                println("⚠️ [recallMessage] 未找到 Silk 回复，只撤回用户消息")
+                historyManager.deleteMessages(sessionName, listOf(messageId))
+                deletedMessageIds.add(messageId)
+                messageHistory.removeIf { it.id == messageId }
+                broadcastRecallNotification(listOf(messageId))
+            }
+        } else {
+            // 普通消息：直接删除
+            println("🔄 [recallMessage] 普通消息，直接撤回")
+            historyManager.deleteMessages(sessionName, listOf(messageId))
+            deletedMessageIds.add(messageId)
+            messageHistory.removeIf { it.id == messageId }
+            broadcastRecallNotification(listOf(messageId))
+        }
+        
+        return RecallResult(true, "撤回成功", deletedMessageIds)
+    }
+    
+    /**
+     * 广播撤回通知给所有连接的客户端
+     */
+    private suspend fun broadcastRecallNotification(messageIds: List<String>) {
+        val recallMessage = Message(
+            id = generateId(),
+            userId = "system",
+            userName = "系统",
+            content = messageIds.joinToString(","),
+            timestamp = System.currentTimeMillis(),
+            type = MessageType.RECALL,
+            isTransient = true
+        )
+        val notificationJson = Json.encodeToString(recallMessage)
+        
+        connections.values.forEach { session ->
+            try {
+                session.send(Frame.Text(notificationJson))
+            } catch (e: Exception) {
+                println("❌ [broadcastRecallNotification] 发送失败: ${e.message}")
+            }
+        }
+        println("📢 [broadcastRecallNotification] 已广播撤回通知: $messageIds")
+    }
+    
     private fun generateId(): String {
         return System.currentTimeMillis().toString() + (0..999).random()
     }
 }
+
+/**
+ * 消息撤回结果
+ */
+@Serializable
+data class RecallResult(
+    val success: Boolean,
+    val message: String,
+    val deletedMessageIds: List<String>
+)
 
 val chatServer = ChatServer()
 

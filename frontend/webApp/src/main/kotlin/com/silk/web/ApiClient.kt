@@ -137,14 +137,22 @@ data class DeleteGroupResponse(
     val message: String
 )
 
+// ==================== 通用响应模型 ====================
+
+@Serializable
+data class SimpleResponse(
+    val success: Boolean,
+    val message: String
+)
+
 object ApiClient {
     // 动态检测后端地址：使用当前访问的 hostname + 后端端口
     private val BASE_URL: String
         get() {
             val hostname = window.location.hostname
             val protocol = window.location.protocol
-            // 始终使用当前 hostname + 后端端口 8006
-            return "$protocol//$hostname:8006"
+            // 始终使用当前 hostname + 后端端口 8003 (silk-fork)
+            return "$protocol//$hostname:8003"
         }
     private val jsonParser = Json { ignoreUnknownKeys = true }
     
@@ -409,6 +417,25 @@ object ApiClient {
         } catch (e: Exception) {
             console.log("更新用户设置失败:", e)
             UserSettingsResponse(false, "网络错误")
+        }
+    }
+    
+    // ==================== 消息撤回相关 API ====================
+    
+    /**
+     * 撤回消息
+     * @param groupId 群组ID
+     * @param messageId 要撤回的消息ID
+     * @param userId 当前用户ID
+     */
+    suspend fun recallMessage(groupId: String, messageId: String, userId: String): SimpleResponse {
+        return try {
+            val body = """{"groupId":"$groupId","messageId":"$messageId","userId":"$userId"}"""
+            val response = post("/api/messages/recall", body)
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            console.log("撤回消息失败:", e)
+            SimpleResponse(false, "网络错误")
         }
     }
     
