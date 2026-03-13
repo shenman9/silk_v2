@@ -28,7 +28,7 @@ expect class PlatformWebSocket(
 }
 
 class ChatClient(
-    private val serverUrl: String = "ws://localhost:8006",
+    private val serverUrl: String = "ws://localhost:8003",
     private val onLog: LogCallback? = null
 ) {
     private fun log(message: String) {
