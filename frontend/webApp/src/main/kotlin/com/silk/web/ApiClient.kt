@@ -426,6 +426,28 @@ object ApiClient {
      * @param messageId 要撤回的消息ID
      * @param userId 当前用户ID
      */
+    suspend fun sendMessageToGroup(
+        groupId: String,
+        userId: String,
+        userName: String,
+        content: String
+    ): Boolean {
+        return try {
+            val escapedContent = content
+                .replace("\\", "\\\\")
+                .replace("\"", "\\\"")
+                .replace("\n", "\\n")
+                .replace("\r", "\\r")
+                .replace("\t", "\\t")
+            val body = """{"groupId":"$groupId","userId":"$userId","userName":"$userName","content":"$escapedContent"}"""
+            val response = post("/api/messages/send", body)
+            response.contains("\"success\":true") || response.contains("\"success\": true")
+        } catch (e: Exception) {
+            console.log("❌ 发送消息失败:", e)
+            false
+        }
+    }
+
     suspend fun recallMessage(groupId: String, messageId: String, userId: String): SimpleResponse {
         return try {
             val body = """{"groupId":"$groupId","messageId":"$messageId","userId":"$userId"}"""

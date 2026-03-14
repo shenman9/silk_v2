@@ -377,6 +377,13 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
     // 消息撤回相关状态：正在撤回中的消息ID集合，防止重复点击
     var recallingMessageIds by remember { mutableStateOf(setOf<String>()) }
     
+    // 消息转发相关状态
+    var showForwardDialog by remember { mutableStateOf(false) }
+    var messageToForward by remember { mutableStateOf<Message?>(null) }
+    var userGroups by remember { mutableStateOf<List<Group>>(emptyList()) }
+    var isLoadingGroups by remember { mutableStateOf(false) }
+    var forwardResult by remember { mutableStateOf<String?>(null) }
+    
     // 从消息历史中提取用户列表（去重）
     val sessionUsers = remember(messages) {
         val users = mutableSetOf<Pair<String, String>>() // (id, name)
@@ -707,6 +714,21 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                                     recallingMessageIds = recallingMessageIds - messageId
                                 }
                             }
+                        }
+                    },
+                    onCopy = { content ->
+                        copyTextToClipboard(content)
+                        console.log("✅ 消息已复制到剪贴板")
+                    },
+                    onForward = { msg ->
+                        // 设置转发消息并显示转发对话框
+                        messageToForward = msg
+                        scope.launch {
+                            isLoadingGroups = true
+                            val response = ApiClient.getUserGroups(user.id)
+                            userGroups = response.groups?.filter { it.id != group.id } ?: emptyList()
+                            isLoadingGroups = false
+                            showForwardDialog = true
                         }
                     }
                 )
@@ -1237,6 +1259,204 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                     }) {
                         Text(strings.sendButton)
                     }
+                }
+            }
+        }
+    }
+    
+    // 转发对话框
+    if (showForwardDialog && messageToForward != null) {
+        Div({
+            style {
+                position(Position.Fixed)
+                top(0.px)
+                left(0.px)
+                width(100.percent)
+                height(100.vh)
+                backgroundColor(Color("rgba(74, 64, 56, 0.6)"))
+                display(DisplayStyle.Flex)
+                justifyContent(JustifyContent.Center)
+                alignItems(AlignItems.Center)
+                property("z-index", "1100")
+                property("backdrop-filter", "blur(4px)")
+            }
+            onClick { 
+                showForwardDialog = false
+                messageToForward = null
+                forwardResult = null
+            }
+        }) {
+            Div({
+                style {
+                    backgroundColor(Color(SilkColors.surfaceElevated))
+                    borderRadius(16.px)
+                    padding(28.px)
+                    width(400.px)
+                    maxWidth(90.vw)
+                    property("max-height", "70vh")
+                    property("overflow-y", "auto")
+                    property("box-shadow", "0 8px 32px rgba(169, 137, 77, 0.2)")
+                }
+                onClick { it.stopPropagation() }
+            }) {
+                // 标题
+                Div({
+                    style {
+                        display(DisplayStyle.Flex)
+                        justifyContent(JustifyContent.SpaceBetween)
+                        alignItems(AlignItems.Center)
+                        marginBottom(16.px)
+                    }
+                }) {
+                    Span({
+                        style {
+                            fontSize(18.px)
+                            property("font-weight", "bold")
+                            color(Color(SilkColors.primary))
+                        }
+                    }) { Text("💬 转发到对话") }
+                    Span({
+                        style {
+                            fontSize(13.px)
+                            color(Color(SilkColors.textSecondary))
+                        }
+                    }) { Text("1 条消息") }
+                }
+                
+                // 消息预览
+                Div({
+                    style {
+                        backgroundColor(Color("#F5F5F5"))
+                        borderRadius(8.px)
+                        padding(12.px)
+                        marginBottom(16.px)
+                        fontSize(13.px)
+                        color(Color(SilkColors.textSecondary))
+                        property("max-height", "60px")
+                        property("overflow", "hidden")
+                    }
+                }) {
+                    Text("${messageToForward!!.userName}: ${messageToForward!!.content.take(80)}${if (messageToForward!!.content.length > 80) "..." else ""}")
+                }
+                
+                // 结果提示
+                forwardResult?.let { result ->
+                    Div({
+                        style {
+                            textAlign("center")
+                            marginBottom(12.px)
+                            fontSize(14.px)
+                            color(if (result.contains("✅")) Color("#10B981") else Color("#EF4444"))
+                        }
+                    }) { Text(result) }
+                }
+                
+                // 群组列表
+                if (isLoadingGroups) {
+                    Div({
+                        style {
+                            textAlign("center")
+                            padding(20.px)
+                            color(Color(SilkColors.textSecondary))
+                        }
+                    }) { Text("加载中...") }
+                } else if (userGroups.isEmpty()) {
+                    Div({
+                        style {
+                            textAlign("center")
+                            padding(20.px)
+                            color(Color(SilkColors.textSecondary))
+                        }
+                    }) { Text("没有其他对话可转发") }
+                } else {
+                    userGroups.forEach { targetGroup ->
+                        Div({
+                            style {
+                                display(DisplayStyle.Flex)
+                                alignItems(AlignItems.Center)
+                                padding(12.px)
+                                borderRadius(8.px)
+                                property("cursor", "pointer")
+                                property("transition", "background-color 0.2s")
+                            }
+                            onClick {
+                                val msg = messageToForward ?: return@onClick
+                                scope.launch {
+                                    forwardResult = null
+                                    val forwardContent = "📨 转发自【${group.name}】:\n\n${msg.userName}: ${msg.content}"
+                                    val success = ApiClient.sendMessageToGroup(
+                                        groupId = targetGroup.id,
+                                        userId = user.id,
+                                        userName = user.fullName,
+                                        content = forwardContent
+                                    )
+                                    if (success) {
+                                        forwardResult = "✅ 已转发到 ${targetGroup.name}"
+                                        kotlinx.coroutines.delay(1000)
+                                        showForwardDialog = false
+                                        messageToForward = null
+                                        forwardResult = null
+                                    } else {
+                                        forwardResult = "❌ 转发失败"
+                                    }
+                                }
+                            }
+                        }) {
+                            // 群头像
+                            Div({
+                                style {
+                                    property("width", "40px")
+                                    property("height", "40px")
+                                    borderRadius(50.percent)
+                                    backgroundColor(Color(SilkColors.primary))
+                                    display(DisplayStyle.Flex)
+                                    justifyContent(JustifyContent.Center)
+                                    alignItems(AlignItems.Center)
+                                    property("margin-right", "12px")
+                                    property("flex-shrink", "0")
+                                }
+                            }) {
+                                Span({
+                                    style {
+                                        color(Color("#FFFFFF"))
+                                        fontSize(16.px)
+                                        property("font-weight", "bold")
+                                    }
+                                }) { Text(targetGroup.name.take(1)) }
+                            }
+                            // 群名
+                            Span({
+                                style {
+                                    fontSize(15.px)
+                                    color(Color(SilkColors.textPrimary))
+                                }
+                            }) { Text(targetGroup.name) }
+                        }
+                    }
+                }
+                
+                // 取消按钮
+                Div({
+                    style {
+                        marginTop(16.px)
+                        textAlign("center")
+                    }
+                }) {
+                    Span({
+                        style {
+                            fontSize(14.px)
+                            color(Color(SilkColors.textSecondary))
+                            property("cursor", "pointer")
+                            padding(8.px, 24.px)
+                            borderRadius(8.px)
+                            backgroundColor(Color("#F5F5F5"))
+                        }
+                        onClick {
+                            showForwardDialog = false
+                            messageToForward = null
+                            forwardResult = null
+                        }
+                    }) { Text("取消") }
                 }
             }
         }
@@ -2008,7 +2228,9 @@ fun MessageItem(
     currentUserId: String = "",
     groupId: String = "",
     isRecalling: Boolean = false,
-    onRecall: (String) -> Unit = {}
+    onRecall: (String) -> Unit = {},
+    onCopy: (String) -> Unit = {},
+    onForward: (Message) -> Unit = {}
 ) {
     val timeString = remember(message.timestamp) {
         formatTime(message.timestamp)
@@ -2019,6 +2241,10 @@ fun MessageItem(
                     message.userId != "silk_ai_agent" && 
                     message.type == MessageType.TEXT &&
                     !isTransient
+    
+    // 是否显示操作按钮：文本消息且不是临时消息
+    val showActions = message.type == MessageType.TEXT && !isTransient && 
+                      message.category != com.silk.shared.models.MessageCategory.AGENT_STATUS
     
     // Agent 状态消息 - 灰色样式
     if (message.category == com.silk.shared.models.MessageCategory.AGENT_STATUS) {
@@ -2198,6 +2424,55 @@ fun MessageItem(
                     } else {
                         // 普通文本消息
                         Text(message.content)
+                    }
+                }
+                
+                // 消息操作按钮行（复制、转发等）
+                if (!isTransient && message.type == MessageType.TEXT) {
+                    Div({
+                        style {
+                            display(DisplayStyle.Flex)
+                            property("justify-content", "flex-end")
+                            property("gap", "8px")
+                            marginTop(8.px)
+                            property("opacity", "0.6")
+                            property("transition", "opacity 0.2s")
+                        }
+                    }) {
+                        // 复制按钮
+                        Span({
+                            style {
+                                fontSize(11.px)
+                                color(Color(SilkColors.textSecondary))
+                                property("cursor", "pointer")
+                                property("padding", "2px 6px")
+                                property("border-radius", "4px")
+                                property("transition", "all 0.2s")
+                            }
+                            onClick {
+                                // 复制消息内容到剪贴板
+                                copyTextToClipboard(message.content)
+                            }
+                        }) {
+                            Text("📋复制")
+                        }
+                        
+                        // 转发按钮
+                        Span({
+                            style {
+                                fontSize(11.px)
+                                color(Color(SilkColors.textSecondary))
+                                property("cursor", "pointer")
+                                property("padding", "2px 6px")
+                                property("border-radius", "4px")
+                                property("transition", "all 0.2s")
+                            }
+                            onClick {
+                                onForward(message)
+                            }
+                        }) {
+                            Text("↗转发")
+                        }
                     }
                 }
             }
@@ -2914,4 +3189,36 @@ fun MembersDialog(
             }
         }
     }
+}
+
+/**
+ * 复制文本到剪贴板（Web版）
+ */
+fun copyTextToClipboard(text: String) {
+    val clipboard = kotlinx.browser.window.navigator.asDynamic().clipboard
+    if (clipboard != null) {
+        clipboard.writeText(text).then(
+            { console.log("✅ 已复制到剪贴板") },
+            { _: dynamic -> fallbackCopyToClipboard(text) }
+        )
+    } else {
+        fallbackCopyToClipboard(text)
+    }
+}
+
+private fun fallbackCopyToClipboard(text: String) {
+    val document = kotlinx.browser.document
+    val textarea = document.createElement("textarea") as org.w3c.dom.HTMLTextAreaElement
+    textarea.value = text
+    textarea.style.position = "fixed"
+    textarea.style.left = "-9999px"
+    document.body?.appendChild(textarea)
+    textarea.select()
+    try {
+        document.execCommand("copy")
+        console.log("✅ 使用备用方案复制成功")
+    } catch (e: dynamic) {
+        console.error("❌ 备用方案复制失败:", e)
+    }
+    document.body?.removeChild(textarea)
 }

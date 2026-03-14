@@ -1540,6 +1540,9 @@ fun MessageItem(
     // 检测PDF下载链接
     val isPdfMessage = message.content.contains("/download/report/") && message.content.contains(".pdf")
     
+    // ✅ 是否显示上下文菜单（非临时消息、非系统消息、文本消息）
+    val canShowContextMenu = !isTransient && !isSystemMessage && message.type == MessageType.TEXT
+    
     // ✅ 文件消息特殊处理
     if (isFileMessage) {
         // 解析文件信息：content 格式为 JSON {"fileName":"xxx","fileSize":123,"downloadUrl":"xxx"}
@@ -1722,9 +1725,78 @@ fun MessageItem(
                     Spacer(modifier = Modifier.height(4.dp))
                 }
                 
-                // 消息气泡 - 简化点击处理，避免与华为系统手势冲突
-                // ✅ 选择模式下：单击选择/取消选择
-                // ✅ 非选择模式下：双击进入选择模式（长按在华为手机上有冲突）
+                var showContextMenu by remember { mutableStateOf(false) }
+                
+                if (showContextMenu) {
+                    AlertDialog(
+                        onDismissRequest = { showContextMenu = false },
+                        title = { Text("消息操作", fontWeight = FontWeight.Bold) },
+                        text = {
+                            Column {
+                                TextButton(
+                                    onClick = {
+                                        showContextMenu = false
+                                        try {
+                                            val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) 
+                                                as android.content.ClipboardManager
+                                            val clip = android.content.ClipData.newPlainText("消息", message.content)
+                                            clipboard.setPrimaryClip(clip)
+                                            android.widget.Toast.makeText(context, "已复制到剪贴板", android.widget.Toast.LENGTH_SHORT).show()
+                                        } catch (_: Exception) { }
+                                    },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) { Text("📋 复制", color = MaterialTheme.colorScheme.onSurface) }
+                                
+                                TextButton(
+                                    onClick = {
+                                        showContextMenu = false
+                                        try { onLongPress(message.id) } catch (_: Exception) { }
+                                    },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) { Text("↗ 转发", color = MaterialTheme.colorScheme.onSurface) }
+                                
+                                TextButton(
+                                    onClick = {
+                                        showContextMenu = false
+                                        try {
+                                            val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                                                type = "text/plain"
+                                                putExtra(Intent.EXTRA_TEXT, "${message.userName}: ${message.content}")
+                                            }
+                                            context.startActivity(Intent.createChooser(shareIntent, "分享到"))
+                                        } catch (_: Exception) { }
+                                    },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) { Text("📤 分享", color = MaterialTheme.colorScheme.onSurface) }
+                                
+                                if (canRecall && !isRecalling) {
+                                    TextButton(
+                                        onClick = {
+                                            showContextMenu = false
+                                            try { onRecall(message.id) } catch (_: Exception) { }
+                                        },
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) { Text("↩ 撤回", color = MaterialTheme.colorScheme.onSurface) }
+                                }
+                                
+                                TextButton(
+                                    onClick = {
+                                        showContextMenu = false
+                                        try { onLongPress(message.id) } catch (_: Exception) { }
+                                    },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) { Text("☑️ 多选", color = MaterialTheme.colorScheme.onSurface) }
+                            }
+                        },
+                        confirmButton = {},
+                        dismissButton = {
+                            TextButton(onClick = { showContextMenu = false }) {
+                                Text("取消")
+                            }
+                        }
+                    )
+                }
+                
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = if (isCurrentUser) Arrangement.End else Arrangement.Start,
@@ -1748,16 +1820,27 @@ fun MessageItem(
                             Modifier
                                 .weight(1f, fill = false)
                                 .background(
-                                    if (isSelected) Color(0xFF4FC3F7).copy(alpha = 0.4f) else Color.Transparent,  // 明亮天蓝色背景
+                                    if (isSelected) Color(0xFF4FC3F7).copy(alpha = 0.4f) else Color.Transparent,
                                     shape = MaterialTheme.shapes.medium
                                 )
-                                .clickable {
-                                    // 选择模式下，单击切换选中状态
-                                    if (isSelectionMode) {
-                                        onToggleSelection(message.id)
+                                .combinedClickable(
+                                    onClick = {
+                                        if (isSelectionMode) {
+                                            onToggleSelection(message.id)
+                                        }
+                                    },
+                                    onLongClick = {
+                                        if (!isSelectionMode) {
+                                            showContextMenu = true
+                                            try {
+                                                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                                                    (context.getSystemService(android.content.Context.VIBRATOR_SERVICE) as? android.os.Vibrator)
+                                                        ?.vibrate(android.os.VibrationEffect.createOneShot(50, android.os.VibrationEffect.DEFAULT_AMPLITUDE))
+                                                }
+                                            } catch (_: Exception) { }
+                                        }
                                     }
-                                    // 非选择模式下不做任何操作
-                                }
+                                )
                         } else {
                             Modifier.weight(1f, fill = false)
                         }
@@ -1917,39 +2000,14 @@ fun MessageItem(
                     }
                 }  // ✅ Row 结束（选中图标容器）
             
-            // 当前用户消息的时间和撤回按钮
             if (isCurrentUser) {
                 Spacer(modifier = Modifier.height(4.dp))
-                Row(
-                    modifier = Modifier.padding(horizontal = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = timeString,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    
-                    // 撤回按钮：只能撤回自己的消息，且不是 Silk 的消息，且不在选择模式
-                    val canRecall = message.userName != "Silk" && !isSelectionMode && !isTransient
-                    if (canRecall) {
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = if (isRecalling) "撤回中..." else "撤回",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = if (isRecalling) 
-                                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                            else 
-                                SilkColors.textSecondary,
-                            modifier = Modifier
-                                .clickable(enabled = !isRecalling) {
-                                    if (!isRecalling) {
-                                        onRecall(message.id)
-                                    }
-                                }
-                        )
-                    }
-                }
+                Text(
+                    text = timeString,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 4.dp)
+                )
             }
         }
     }
