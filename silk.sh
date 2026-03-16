@@ -20,6 +20,8 @@
 # Java Home - 支持 macOS Homebrew 和 Linux
 if [ -d "/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home" ]; then
     export JAVA_HOME="/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home"
+elif [ -d "/usr/lib/jvm/java-17-openjdk-amd64" ]; then
+    export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
 elif [ -d "/usr/lib/jvm/java-17-openjdk" ]; then
     export JAVA_HOME=/usr/lib/jvm/java-17-openjdk
 else
@@ -34,6 +36,8 @@ elif [ -d "$HOME/Library/Android/sdk" ]; then
     export ANDROID_HOME="$HOME/Library/Android/sdk"
 elif [ -d "/usr/lib/android-sdk" ]; then
     export ANDROID_HOME=/usr/lib/android-sdk
+elif [ -d "/root/Android/Sdk" ]; then
+    export ANDROID_HOME=/root/Android/Sdk
 elif [ -d "/root/android-sdk" ]; then
     export ANDROID_HOME=/root/android-sdk
 fi
