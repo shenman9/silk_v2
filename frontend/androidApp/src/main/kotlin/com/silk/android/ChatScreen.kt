@@ -224,6 +224,24 @@ fun ChatScreen(appState: AppState) {
     var isInvitingMember by remember { mutableStateOf(false) }
     var inviteMemberResult by remember { mutableStateOf<String?>(null) }
     
+    // @ mention 功能状态（输入 @ 后弹出群成员/会话用户列表）
+    var showMentionMenu by remember { mutableStateOf(false) }
+    var mentionSearchText by remember { mutableStateOf("") }
+    var mentionStartIndex by remember { mutableStateOf(-1) }
+    
+    // 从消息历史中提取用户列表（去重），用于 @ 提及下拉
+    val sessionUsers = remember(messages) {
+        val users = mutableSetOf<Pair<String, String>>() // (id, name)
+        users.add("silk_ai_agent" to "🤖 Silk")
+        users.add(user.id to user.fullName)
+        messages.forEach { msg ->
+            if (msg.userId != "silk_ai_agent" && msg.userId != user.id) {
+                users.add(msg.userId to msg.userName)
+            }
+        }
+        users.toList()
+    }
+    
     LaunchedEffect(Unit) {
         addLog("📱 应用版本: 1.0.12-robust-reconnect (Build 12)")
         addLog("📱 Android版本: ${android.os.Build.VERSION.RELEASE}")
@@ -997,48 +1015,138 @@ fun ChatScreen(appState: AppState) {
                         
                         Spacer(modifier = Modifier.height(8.dp))
                         
-                        // 输入框和发送按钮在同一行
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            // 输入框
-                            OutlinedTextField(
-                                value = messageText,
-                                onValueChange = { messageText = it },
-                                modifier = Modifier.weight(1f),
-                                placeholder = { Text("输入消息... @silk 提问AI") },
-                                maxLines = 3
-                            )
-                            
-                            // 发送按钮
-                            Button(
-                                onClick = {
-                                    if (messageText.text.isNotBlank()) {
-                                        val msgContent = messageText.text
-                                        addLog("📤 发送消息: ${msgContent.take(20)}...")
-                                        
-                                        // 如果是 @silk 消息，立即显示等待状态
-                                        if (msgContent.lowercase().startsWith("@silk")) {
-                                            isWaitingForAI = true
-                                            addLog("⏳ 开始等待 AI 响应...")
-                                        }
-                                        
-                                        scope.launch {
-                                            chatClient.sendMessage(user.id, user.fullName, msgContent)
-                                            addLog("✅ 消息已发送")
-                                            messageText = TextFieldValue("")
+                        // 输入框容器（用于 @ 提及下拉）
+                        Box(modifier = Modifier.fillMaxWidth()) {
+                            Column(modifier = Modifier.fillMaxWidth()) {
+                                // @ 提及下拉列表（输入 @ 后显示群成员/会话用户）
+                                if (showMentionMenu) {
+                                    val filteredUsers = sessionUsers.filter { (_, name) ->
+                                        mentionSearchText.isEmpty() ||
+                                            name.lowercase().contains(mentionSearchText.lowercase())
+                                    }
+                                    Card(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .heightIn(max = 200.dp),
+                                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                                        shape = RoundedCornerShape(8.dp),
+                                        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+                                    ) {
+                                        if (filteredUsers.isEmpty()) {
+                                            Text(
+                                                text = "无匹配用户",
+                                                modifier = Modifier.padding(12.dp, 16.dp),
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        } else {
+                                            LazyColumn(
+                                                modifier = Modifier.fillMaxWidth()
+                                            ) {
+                                                items(filteredUsers.size) { index ->
+                                                    val (userId, userName) = filteredUsers[index]
+                                                    val displayName = if (userId == "silk_ai_agent") "Silk" else userName
+                                                    Surface(
+                                                        onClick = {
+                                                            val beforeAt = messageText.text.substring(0, mentionStartIndex.coerceAtLeast(0))
+                                                            val newText = "$beforeAt@$displayName "
+                                                            messageText = TextFieldValue(
+                                                                text = newText,
+                                                                selection = TextRange(newText.length)
+                                                            )
+                                                            showMentionMenu = false
+                                                            mentionStartIndex = -1
+                                                        },
+                                                        modifier = Modifier.fillMaxWidth()
+                                                    ) {
+                                                        Text(
+                                                            text = userName,
+                                                            modifier = Modifier.padding(10.dp, 12.dp),
+                                                            style = MaterialTheme.typography.bodyMedium,
+                                                            fontWeight = if (userId == "silk_ai_agent") FontWeight.SemiBold else FontWeight.Normal
+                                                        )
+                                                    }
+                                                }
+                                            }
                                         }
                                     }
-                                },
-                                enabled = messageText.text.isNotBlank(),
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = SilkColors.primary
-                                ),
-                                modifier = Modifier.height(56.dp)  // 匹配输入框高度
-                            ) {
-                                Icon(Icons.Default.Send, contentDescription = "发送")
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                }
+                                
+                                // 输入框和发送按钮在同一行
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    // 输入框
+                                    OutlinedTextField(
+                                        value = messageText,
+                                        onValueChange = { newValue ->
+                                            val oldText = messageText.text
+                                            messageText = newValue
+                                            val newText = newValue.text
+                                            // 检测刚输入的 @
+                                            if (newText.length > oldText.length) {
+                                                val lastChar = newText.getOrNull(newText.length - 1)
+                                                if (lastChar == '@') {
+                                                    showMentionMenu = true
+                                                    mentionStartIndex = newText.length - 1
+                                                    mentionSearchText = ""
+                                                    return@OutlinedTextField
+                                                }
+                                            }
+                                            // 处于 @ 提及模式时，更新搜索或遇空格/删除@时关闭
+                                            if (showMentionMenu && mentionStartIndex >= 0) {
+                                                if (mentionStartIndex >= newText.length || newText.getOrNull(mentionStartIndex) != '@') {
+                                                    showMentionMenu = false
+                                                    mentionStartIndex = -1
+                                                } else {
+                                                    val textAfterAt = newText.substring(mentionStartIndex + 1)
+                                                    val spaceIndex = textAfterAt.indexOf(' ')
+                                                    if (spaceIndex >= 0) {
+                                                        showMentionMenu = false
+                                                        mentionStartIndex = -1
+                                                    } else {
+                                                        mentionSearchText = textAfterAt
+                                                    }
+                                                }
+                                            }
+                                        },
+                                        modifier = Modifier.weight(1f),
+                                        placeholder = { Text("输入消息... @ 提及成员 / @silk 提问AI") },
+                                        maxLines = 3
+                                    )
+                                    
+                                    // 发送按钮
+                                    Button(
+                                        onClick = {
+                                            if (messageText.text.isNotBlank()) {
+                                                val msgContent = messageText.text
+                                                addLog("📤 发送消息: ${msgContent.take(20)}...")
+                                                
+                                                // 如果是 @silk 消息，立即显示等待状态
+                                                if (msgContent.lowercase().startsWith("@silk")) {
+                                                    isWaitingForAI = true
+                                                    addLog("⏳ 开始等待 AI 响应...")
+                                                }
+                                                
+                                                scope.launch {
+                                                    chatClient.sendMessage(user.id, user.fullName, msgContent)
+                                                    addLog("✅ 消息已发送")
+                                                    messageText = TextFieldValue("")
+                                                }
+                                            }
+                                        },
+                                        enabled = messageText.text.isNotBlank(),
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = SilkColors.primary
+                                        ),
+                                        modifier = Modifier.height(56.dp)  // 匹配输入框高度
+                                    ) {
+                                        Icon(Icons.Default.Send, contentDescription = "发送")
+                                    }
+                                }
                             }
                         }
                     }
