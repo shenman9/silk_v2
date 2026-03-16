@@ -509,6 +509,27 @@ class ChatServer(
                     "tool" -> {
                         sendAgentStatus(content)
                     }
+                    "streaming_incremental" -> {
+                        // ✅ 流式输出：发送增量消息
+                        val incrementalMessage = Message(
+                            id = "streaming_${System.currentTimeMillis()}",
+                            userId = SilkAgent.AGENT_ID,
+                            userName = SilkAgent.AGENT_NAME,
+                            content = content,
+                            timestamp = System.currentTimeMillis(),
+                            type = MessageType.TEXT,
+                            isTransient = true,   // 临时消息，不持久化
+                            isIncremental = true   // 增量消息，前端需要拼接
+                        )
+                        val messageJson = Json.encodeToString(incrementalMessage)
+                        connections.values.forEach { session ->
+                            try {
+                                session.send(Frame.Text(messageJson))
+                            } catch (e: Exception) {
+                                e.printStackTrace()
+                            }
+                        }
+                    }
                     "complete" -> {
                         fullResponse = content
                     }

@@ -130,7 +130,69 @@ class DirectModelAgent(
         val completion_tokens: Int,
         val total_tokens: Int
     )
-    
+
+    /**
+     * 流式响应模型（SSE）
+     */
+    @Serializable
+    data class StreamResponse(
+        val choices: List<StreamChoice>
+    )
+
+    @Serializable
+    data class StreamChoice(
+        val delta: StreamDelta,
+        val finish_reason: String? = null
+    )
+
+    @Serializable
+    data class StreamDelta(
+        val content: String? = null,
+        val role: String? = null
+    )
+
+
+    /**
+     * 流式响应模型（SSE）- 支持 tool_calls
+     */
+    @Serializable
+    data class StreamResponseWithTools(
+        val choices: List<StreamChoiceWithTools>
+    )
+
+    @Serializable
+    data class StreamChoiceWithTools(
+        val delta: StreamDeltaWithTools,
+        val finish_reason: String? = null
+    )
+
+    @Serializable
+    data class StreamDeltaWithTools(
+        val content: String? = null,
+        val role: String? = null,
+        val tool_calls: List<StreamToolCall>? = null
+    )
+
+    @Serializable
+    data class StreamToolCall(
+        val id: String? = null,
+        val type: String? = null,
+        val function: StreamToolFunction? = null
+    )
+
+    @Serializable
+    data class StreamToolFunction(
+        val name: String? = null,
+        val arguments: String? = null
+    )
+
+    /**
+     * 流式调用结果
+     */
+    private data class StreamingResult(
+        val content: String,
+        val toolCalls: List<ToolCall>? = null
+    )
     /**
      * 处理用户输入
      * @param userInput 用户输入
@@ -156,8 +218,9 @@ class DirectModelAgent(
     }
     
     /**
-     * 调用模型（支持 tool calling）
+     * 调用模型（支持 tool calling + 流式输出）
      * 循环处理：调用模型 -> 检查 tool_call -> 执行 tool -> 返回结果 -> 再次调用
+     * ✅ 从一开始就使用流式API，在流中检测 tool_calls
      */
     private suspend fun chatWithTools(
         callback: suspend (stepType: String, content: String, isComplete: Boolean) -> Unit
@@ -172,31 +235,22 @@ class DirectModelAgent(
             
             callback("thinking", "🤔 思考中...", false)
             
-            // 调用模型
-            val response = callModel()
+            // ✅ 从一开始就使用流式API检测 tool_calls 并实时输出
+            val result = callModelStreamingWithToolDetection(callback)
             
-            val message = response.choices.firstOrNull()?.message
-            if (message == null) {
-                callback("error", "❌ 模型返回空响应", true)
-                return "抱歉，发生了错误。"
-            }
-            
-            // 检查是否有 tool_calls
-            val toolCalls = message.tool_calls
-            
-            if (toolCalls != null && toolCalls.isNotEmpty()) {
+            if (result.toolCalls != null && result.toolCalls.isNotEmpty()) {
                 // 模型想要使用工具
                 callback("tool", "🔧 使用工具处理...", false)
                 
                 // 添加 assistant 消息（包含 tool_calls）到历史
                 conversationHistory.add(Message(
                     role = "assistant",
-                    content = message.content,
-                    tool_calls = toolCalls
+                    content = result.content,
+                    tool_calls = result.toolCalls
                 ))
                 
                 // 执行所有 tool_calls
-                for (toolCall in toolCalls) {
+                for (toolCall in result.toolCalls) {
                     val toolResult = if (toolCall.function.name == "search_context" && searchContextCalledThisTurn) {
                         "【仅执行一次】已执行过文档搜索。请根据上方已有的搜索结果直接回答用户，不要再次调用本工具。"
                     } else {
@@ -216,14 +270,12 @@ class DirectModelAgent(
                 continue
             }
             
-            // 没有 tool_calls，返回最终回复
-            val finalContent = message.content ?: ""
-            
+            // 没有 tool_calls，流式输出已完成
             // 添加 assistant 消息到历史
-            conversationHistory.add(Message(role = "assistant", content = finalContent))
+            conversationHistory.add(Message(role = "assistant", content = result.content))
             
-            callback("complete", finalContent, true)
-            return finalContent
+            callback("complete", result.content, true)
+            return result.content
         }
         
         callback("error", "❌ 超过最大迭代次数", true)
@@ -261,6 +313,285 @@ class DirectModelAgent(
         }
         
         return json.decodeFromString(response.body())
+    }
+    /**
+     * 调用模型 API（流式输出 + tool_calls 检测）- 从一开始就使用流式API
+     * 使用 SSE (Server-Sent Events) 格式
+     * 
+     * @return StreamingResult 包含内容和可能的 tool_calls
+     */
+    private suspend fun callModelStreamingWithToolDetection(
+        callback: suspend (stepType: String, content: String, isComplete: Boolean) -> Unit
+    ): StreamingResult {
+        val tools = getAvailableTools()
+        
+        val request = ChatRequest(
+            model = AIConfig.MODEL,
+            messages = conversationHistory.toList(),
+            tools = if (tools.isNotEmpty()) tools else null,
+            temperature = 0.7,
+            max_tokens = 4096,
+            stream = true  // ✅ 启用流式输出
+        )
+        
+        logger.info("📡 [流式API] 开始请求: ${AIConfig.requireApiBaseUrl()}/chat/completions")
+        
+        val httpRequest = HttpRequest.newBuilder()
+            .uri(URI.create("${AIConfig.requireApiBaseUrl()}/chat/completions"))
+            .header("Content-Type", "application/json")
+            .header("Authorization", "Bearer $apiKey")
+            .header("Accept", "text/event-stream")  // SSE
+            .timeout(Duration.ofMillis(AIConfig.TIMEOUT))
+            .POST(HttpRequest.BodyPublishers.ofString(json.encodeToString(request)))
+            .build()
+
+        val response = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofInputStream())
+
+        if (response.statusCode() != 200) {
+            logger.error("❌ 流式API调用失败: ${response.statusCode()}")
+            throw Exception("流式API调用失败: ${response.statusCode()}")
+        }
+
+        val fullText = StringBuilder()
+        var lastSentLength = 0
+        val sendThreshold = 30  // 每30字符发送一次增量（更频繁的流式体验）
+        
+        // 收集 tool_calls
+        val toolCallsMap = mutableMapOf<String, StringBuilder>()  // id -> arguments
+        val toolCallsInfo = mutableMapOf<String, Pair<String, String>>()  // id -> (type, name)
+        var hasToolCalls = false
+        
+        response.body().use { inputStream ->
+            inputStream.bufferedReader().use { reader ->
+                var line: String? = reader.readLine()
+                
+                while (line != null) {
+                    // SSE 格式：data: {...}
+                    if (line.startsWith("data: ")) {
+                        val data = line.removePrefix("data: ").trim()
+                        
+                        // 检查是否结束
+                        if (data == "[DONE]") {
+                            break
+                        }
+                        
+                        try {
+                            // 解析流式响应
+                            val streamResponse = json.decodeFromString<StreamResponseWithTools>(data)
+                            val choice = streamResponse.choices.firstOrNull()
+                            val delta = choice?.delta
+                            
+                            // 处理 content
+                            val content = delta?.content
+                            if (content != null) {
+                                fullText.append(content)
+                                
+                                // 增量发送（每达到阈值发送一次）
+                                if (fullText.length - lastSentLength >= sendThreshold) {
+                                    val incrementalContent = fullText.substring(lastSentLength)
+                                    logger.info("📤 [流式API] 增量发送: ${incrementalContent.length} 字符")
+                                    callback("streaming_incremental", incrementalContent, false)
+                                    lastSentLength = fullText.length
+                                }
+                            }
+                            
+                            // 处理 tool_calls
+                            val toolCalls = delta?.tool_calls
+                            if (toolCalls != null && toolCalls.isNotEmpty()) {
+                                hasToolCalls = true
+                                for (tc in toolCalls) {
+                                    val id = tc.id
+                                    if (id != null) {
+                                        // 新的 tool_call
+                                        toolCallsInfo[id] = Pair(
+                                            tc.type ?: "function",
+                                            tc.function?.name ?: ""
+                                        )
+                                        toolCallsMap[id] = StringBuilder()
+                                    }
+                                    
+                                    // 追加 arguments
+                                    val args = tc.function?.arguments
+                                    if (args != null && tc.id != null) {
+                                        toolCallsMap[tc.id]?.append(args)
+                                    } else if (args != null && toolCallsMap.isNotEmpty()) {
+                                        // 如果没有 id，追加到最后一个
+                                        toolCallsMap.values.lastOrNull()?.append(args)
+                                    }
+                                }
+                            }
+                            
+                        } catch (e: Exception) {
+                            // 忽略解析错误（可能是空行或注释）
+                            logger.debug("⚠️ [流式API] 解析行失败: ${line.take(50)}... - ${e.message}")
+                        }
+                    }
+                    
+                    line = reader.readLine()
+                }
+            }
+        }
+        
+        // 发送剩余内容
+        if (fullText.length > lastSentLength) {
+            val remainingContent = fullText.substring(lastSentLength)
+            if (remainingContent.isNotEmpty()) {
+                logger.info("📤 [流式API] 发送剩余: ${remainingContent.length} 字符")
+                callback("streaming_incremental", remainingContent, false)
+            }
+        }
+        
+        // 构建 tool_calls 结果
+        val finalToolCalls = if (hasToolCalls && toolCallsMap.isNotEmpty()) {
+            toolCallsMap.map { (id, args) ->
+                val info = toolCallsInfo[id] ?: Pair("function", "")
+                ToolCall(
+                    id = id,
+                    type = info.first,
+                    function = ToolFunction(
+                        name = info.second,
+                        arguments = args.toString()
+                    )
+                )
+            }.also {
+                logger.info("🔧 [流式API] 检测到 tool_calls: ${it.map { tc -> tc.function.name }}")
+            }
+        } else null
+        
+        logger.info("✅ [流式API] 完成: ${fullText.length} 字符, tool_calls=${finalToolCalls != null}")
+        
+        return StreamingResult(
+            content = fullText.toString(),
+            toolCalls = finalToolCalls
+        )
+    }
+
+    
+    /**
+     * 调用模型 API（流式输出）- 用于实时显示
+     * 
+     * @param callback 流式输出回调
+     * @return 完整的响应文本
+     */
+    private suspend fun callModelStreaming(
+        callback: suspend (stepType: String, content: String, isComplete: Boolean) -> Unit
+    ): String {
+        logger.info("🌐 [Streaming] 准备发送流式 API 请求...")
+        
+        val request = ChatRequest(
+            model = AIConfig.MODEL,
+            messages = conversationHistory.toList(),
+            tools = null,  // 流式模式不使用 tools（避免复杂性）
+            temperature = 0.7,
+            max_tokens = 8192,
+            stream = true
+        )
+        
+        val httpRequest = HttpRequest.newBuilder()
+            .uri(URI.create("${AIConfig.requireApiBaseUrl()}/chat/completions"))
+            .header("Content-Type", "application/json")
+            .header("Authorization", "Bearer $apiKey")
+            .timeout(Duration.ofMillis(AIConfig.TIMEOUT))
+            .POST(HttpRequest.BodyPublishers.ofString(json.encodeToString(request)))
+            .build()
+        
+        // 使用 InputStream 处理流式响应
+        val response = try {
+            httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofInputStream())
+        } catch (e: Exception) {
+            logger.error("❌ 流式 HTTP 请求失败: ${e.message}", e)
+            throw e
+        }
+        
+        if (response.statusCode() != 200) {
+            logger.error("❌ 流式 API 返回错误状态码: ${response.statusCode()}")
+            throw Exception("流式 API 调用失败：${response.statusCode()}")
+        }
+        
+        val fullText = StringBuilder()
+        var lastDataTime = System.currentTimeMillis()
+        val idleTimeoutMs = 30000L  // 30秒空闲超时
+        var lastSentLength = 0  // 上次发送的位置
+        val sendIntervalChars = 50  // 每累积50字符发送一次（优化性能）
+        
+        try {
+            kotlinx.coroutines.withTimeout(AIConfig.TIMEOUT + 30000L) {
+                response.body().bufferedReader().use { reader ->
+                    var line: String?
+                    var emptyLineCount = 0
+                    
+                    while (true) {
+                        // 检查空闲超时
+                        val idleTime = System.currentTimeMillis() - lastDataTime
+                        if (idleTime > idleTimeoutMs) {
+                            logger.warn("⚠️ 流式读取空闲超时（${idleTime}ms 无新数据）")
+                            break
+                        }
+                        
+                        line = try {
+                            reader.readLine()
+                        } catch (e: Exception) {
+                            logger.warn("⚠️ 读取行失败: ${e.message}")
+                            break
+                        }
+                        
+                        // 流结束
+                        if (line == null) break
+                        
+                        // 跟踪空行
+                        if (line.trim().isEmpty()) {
+                            emptyLineCount++
+                            if (emptyLineCount > 5) break
+                            continue
+                        } else {
+                            emptyLineCount = 0
+                        }
+                        
+                        // SSE 格式：data: {"choices":[{"delta":{"content":"文本"},...}]}
+                        if (line.startsWith("data: ")) {
+                            lastDataTime = System.currentTimeMillis()
+                            val jsonData = line.substring(6).trim()
+                            
+                            if (jsonData == "[DONE]") break
+                            
+                            try {
+                                val streamResponse = json.decodeFromString<StreamResponse>(jsonData)
+                                val content = streamResponse.choices.firstOrNull()?.delta?.content
+                                
+                                if (content != null) {
+                                    fullText.append(content)
+                                    
+                                    // 智能发送：每累积一定字符数发送一次增量更新
+                                    val currentLength = fullText.length
+                                    if (currentLength - lastSentLength >= sendIntervalChars) {
+                                        val incrementalText = fullText.substring(lastSentLength)
+                                        callback("streaming_incremental", incrementalText, false)
+                                        lastSentLength = currentLength
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                // 忽略解析错误
+                            }
+                        }
+                        
+                        kotlinx.coroutines.delay(1)
+                    }
+                }
+            }
+        } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+            logger.error("❌ 流式读取超时，已接收 ${fullText.length} 字符")
+        } catch (e: Exception) {
+            logger.error("❌ 流式读取异常: ${e.message}")
+        }
+        
+        // 发送剩余内容
+        if (fullText.length > lastSentLength) {
+            val remainingText = fullText.substring(lastSentLength)
+            callback("streaming_incremental", remainingText, false)
+        }
+        
+        logger.info("✅ [Streaming] 流式输出完成: ${fullText.length} 字符")
+        return fullText.toString()
     }
     
     /**
