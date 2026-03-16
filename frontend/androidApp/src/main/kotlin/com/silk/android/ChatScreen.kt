@@ -3,6 +3,8 @@ package com.silk.android
 import android.content.Intent
 import android.net.Uri
 import android.app.Activity
+import android.content.Context
+import android.os.Build
 import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -339,13 +341,20 @@ fun ChatScreen(appState: AppState) {
         }
     }
     
-    // 监听应用生命周期，从后台返回时重新连接
+    // ✅ 使用前台服务保持 WebSocket 连接活跃
+    // 前台服务会在应用切换到后台时保持连接，避免显示"连接已断开"
     val lifecycleOwner = LocalLifecycleOwner.current
     var connectionJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
-    // 跟踪是否从后台返回
-    var wentToBackground by remember { mutableStateOf(false) }
-    var lastResumeTime by remember { mutableStateOf(0L) }
+    // 跟踪是否需要重连
+    var needReconnect by remember { mutableStateOf(false) }
+    var lastConnectionTime by remember { mutableStateOf(0L) }
+    
+    // 启动前台服务
+    LaunchedEffect(Unit) {
+        WebSocketForegroundService.start(context, group.name)
+        addLog("🚀 [前台服务] 已启动 WebSocket 保活服务")
+    }
     
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -353,95 +362,79 @@ fun ChatScreen(appState: AppState) {
                 Lifecycle.Event.ON_RESUME -> {
                     scope.launch {
                         addLog("🔄 [生命周期] 应用返回前台")
-                        val now = System.currentTimeMillis()
+                        addLog("   当前连接状态: $connectionState")
                         
-                        // 如果之前进入过后台，或者上次恢复已经超过3秒（防止重复触发）
-                        if (wentToBackground && (now - lastResumeTime > 3000)) {
-                            lastResumeTime = now
-                            addLog("🔄 [生命周期] 检测到从后台返回，强制重新连接...")
-                            addLog("   当前状态: $connectionState")
+                        // ✅ 如果连接已断开或正在连接中，才尝试重连
+                        if (connectionState != ConnectionState.CONNECTED) {
+                            addLog("🔄 [生命周期] 连接未就绪，检查是否需要重连...")
                             
-                            // 先断开旧连接（不管当前状态如何）
-                            try {
-                                addLog("🔌 断开旧连接...")
-                                chatClient.disconnect()
-                                kotlinx.coroutines.delay(1000)  // 等待完全断开
-                                addLog("✅ 旧连接已断开")
-                            } catch (e: Exception) {
-                                addLog("⚠️ 断开旧连接异常: ${e.message}")
-                            }
-                            
-                            // 取消旧的连接协程
-                            connectionJob?.cancel()
+                            // 等待一小段时间，让连接状态稳定
                             kotlinx.coroutines.delay(500)
                             
-                            // 清空临时消息（避免显示旧的处理中消息）
-                            chatClient.clearMessages()
-                            addLog("🗑️ 已清空临时消息")
-                            
-                            // 启动新的连接
-                            connectionJob = scope.launch {
-                                try {
-                                    addLog("🔌 建立新的WebSocket连接...")
-                                    addLog("   URL: $wsUrl")
-                                    addLog("   用户: ${user.id}")
-                                    addLog("   群组: ${group.id}")
-                                    
-                                    chatClient.connect(user.id, user.fullName, group.id)
-                                    
-                                    // 等待连接建立
-                                    var attempts = 0
-                                    while (connectionState != ConnectionState.CONNECTED && attempts < 10) {
-                                        kotlinx.coroutines.delay(500)
-                                        attempts++
-                                        addLog("⏳ 等待连接建立... (${attempts}/10)")
-                                    }
-                                    
-                                    if (connectionState == ConnectionState.CONNECTED) {
-                                        addLog("✅ WebSocket重新连接成功！")
+                            if (connectionState == ConnectionState.DISCONNECTED) {
+                                addLog("🔌 [生命周期] 连接已断开，尝试重新连接...")
+                                needReconnect = true
+                                
+                                // 取消旧的连接协程
+                                connectionJob?.cancel()
+                                kotlinx.coroutines.delay(300)
+                                
+                                // 启动新的连接
+                                connectionJob = scope.launch {
+                                    try {
+                                        addLog("🔌 建立新的WebSocket连接...")
+                                        chatClient.connect(user.id, user.fullName, group.id)
                                         
-                                        // 连接成功后滚动到最新消息
-                                        kotlinx.coroutines.delay(500)
-                                        if (messages.isNotEmpty()) {
-                                            addLog("📜 滚动到最新消息（第${messages.size}条）")
-                                            listState.scrollToItem(0)  // reverseLayout时第0项是最新消息，直接跳转无动画
+                                        // 等待连接建立
+                                        var attempts = 0
+                                        while (connectionState != ConnectionState.CONNECTED && attempts < 10) {
+                                            kotlinx.coroutines.delay(500)
+                                            attempts++
+                                            addLog("⏳ 等待连接建立... (${attempts}/10)")
                                         }
-                                    } else {
-                                        addLog("❌ WebSocket重新连接超时")
+                                        
+                                        if (connectionState == ConnectionState.CONNECTED) {
+                                            addLog("✅ WebSocket重新连接成功！")
+                                            lastConnectionTime = System.currentTimeMillis()
+                                            
+                                            // 连接成功后滚动到最新消息
+                                            kotlinx.coroutines.delay(300)
+                                            if (messages.isNotEmpty()) {
+                                                listState.scrollToItem(0)
+                                            }
+                                        } else {
+                                            addLog("❌ WebSocket重新连接超时")
+                                        }
+                                    } catch (e: Exception) {
+                                        addLog("❌ 重新连接失败: ${e.message}")
                                     }
-                                } catch (e: Exception) {
-                                    addLog("❌ 重新连接失败: ${e.message}")
-                                    e.printStackTrace()
                                 }
+                            } else if (connectionState == ConnectionState.CONNECTING) {
+                                addLog("⏳ [生命周期] 连接正在建立中，等待完成...")
                             }
-                            
-                            wentToBackground = false
-                        } else if (wentToBackground) {
-                            addLog("⚠️ [生命周期] 跳过重连（距上次恢复不足3秒）")
                         } else {
-                            addLog("✅ [生命周期] 首次进入，无需重连")
+                            addLog("✅ [生命周期] 连接正常，无需重连")
+                            // 确保前台服务正在运行
+                            WebSocketForegroundService.start(context, group.name)
                         }
+                        
+                        needReconnect = false
                     }
                 }
                 Lifecycle.Event.ON_PAUSE -> {
-                    // ✅ 不断开连接，保持 WebSocket 活跃
+                    // ✅ 进入后台时保持连接不断开
+                    // 前台服务会维持连接活跃
                     scope.launch {
-                        addLog("⏸️ [生命周期] 应用进入后台 - 保持连接")
-                        addLog("   当前状态: $connectionState")
-                        wentToBackground = true  // 只标记，不断开
+                        addLog("⏸️ [生命周期] 应用进入后台 - 保持连接（前台服务保活）")
+                        addLog("   当前连接状态: $connectionState")
                     }
                 }
                 Lifecycle.Event.ON_STOP -> {
-                    // ✅ 只在完全停止时才断开（长时间后台或切换应用）
+                    // ✅ 即使在 onStop 也不断开连接
+                    // 前台服务会确保连接保持活跃
                     scope.launch {
-                        addLog("⏹️ [生命周期] 应用完全停止 - 断开连接")
-                        try {
-                            connectionJob?.cancel()
-                            chatClient.disconnect()
-                            addLog("🔌 已断开 WebSocket 连接")
-                        } catch (e: Exception) {
-                            addLog("⚠️ 停止时断开连接: ${e.message}")
-                        }
+                        addLog("⏹️ [生命周期] 应用停止 - 前台服务保活中")
+                        addLog("   当前连接状态: $connectionState")
                     }
                 }
                 else -> {}
@@ -452,15 +445,17 @@ fun ChatScreen(appState: AppState) {
         
         onDispose {
             scope.launch {
-                addLog("🔌 清理WebSocket连接...")
+                addLog("🔌 [生命周期] 离开聊天界面，清理资源...")
                 
-                // 先断开连接
+                // 停止前台服务
+                WebSocketForegroundService.stop(context)
+                addLog("🛑 [前台服务] 已停止 WebSocket 保活服务")
+                
+                // 断开连接
                 chatClient.disconnect()
                 
-                // 等待服务器处理完成后再标记已读
+                // 标记已读
                 kotlinx.coroutines.delay(300)
-                
-                // 最后标记已读，确保时间戳晚于所有消息
                 appState.currentUser?.let { user ->
                     try {
                         ApiClient.markGroupAsRead(user.id, group.id)
