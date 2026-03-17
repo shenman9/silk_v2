@@ -850,8 +850,12 @@ fun ChatScreen(appState: AppState) {
                     // ✅ reverseLayout=true 时，第一个 item 显示在底部（靠近输入框）
                     // 所以状态消息要放在最前面，才能显示在最底部
                     
-                    // 1️⃣ 状态消息（搜索、索引等过程状态）- 浅灰色显示，放在最前面（显示在底部）
-                    if (statusMessages.isNotEmpty() || isWaitingForAI) {
+                    // 1️⃣ 状态消息（搜索、索引等过程状态）
+                    // 仅在最终答案尚未开始流式生成前显示
+                    val hasStartedFinalAnswer = transientMessage?.let { msg ->
+                        msg.content.isNotBlank() && msg.currentStep == null && msg.totalSteps == null
+                    } == true
+                    if ((statusMessages.isNotEmpty() || isWaitingForAI) && !hasStartedFinalAnswer) {
                         item(key = "status_messages") {
                             Column(
                                 modifier = Modifier
@@ -864,7 +868,7 @@ fun ChatScreen(appState: AppState) {
                                         isWaitingForAI = false
                                     }
                                 }
-                                
+
                                 // 服务器状态消息（按时间倒序显示，最新的在上面）
                                 statusMessages.reversed().forEach { statusMsg ->
                                     Row(
@@ -884,7 +888,7 @@ fun ChatScreen(appState: AppState) {
                                         )
                                     }
                                 }
-                                
+
                                 // 本地等待状态（服务器状态消息到达前显示）
                                 if (isWaitingForAI && statusMessages.isEmpty()) {
                                     Row(
@@ -907,7 +911,7 @@ fun ChatScreen(appState: AppState) {
                             }
                         }
                     }
-                    
+
                     // 2️⃣ 临时消息（AI处理中）- 不支持选择
                     transientMessage?.let { message ->
                         item(key = "transient_message") {

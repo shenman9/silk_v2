@@ -525,6 +525,12 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
     val transientMessage by chatClient.transientMessage.collectAsState()
     val statusMessages by chatClient.statusMessages.collectAsState()
     val connectionState by chatClient.connectionState.collectAsState()
+    val hasStartedFinalAnswer = transientMessage?.let { msg ->
+        msg.content.isNotBlank() &&
+            msg.currentStep == null &&
+            msg.totalSteps == null &&
+            !isLikelyAgentStatusContent(msg.content)
+    } == true
     
     // Track if we've sent the default instruction for this session
     var hasSentDefaultInstruction by remember { mutableStateOf(false) }
@@ -873,6 +879,35 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                 property("transition", "all 0.2s ease")
             }
         }) {
+            // 显示系统状态消息（灰色）- 放在消息列表前，避免遮挡最终回复
+            if (statusMessages.isNotEmpty() && !hasStartedFinalAnswer) {
+                Div({
+                    style {
+                        backgroundColor(Color("#F5F5F5"))
+                        borderRadius(8.px)
+                        padding(10.px, 14.px)
+                        marginBottom(8.px)
+                        property("border-left", "3px solid #9E9E9E")
+                    }
+                }) {
+                    statusMessages.forEach { status ->
+                        Div({
+                            style {
+                                color(Color("#757575"))
+                                fontSize(13.px)
+                                fontStyle("italic")
+                                marginBottom(4.px)
+                                display(DisplayStyle.Flex)
+                                alignItems(AlignItems.Center)
+                                property("gap", "8px")
+                            }
+                        }) {
+                            Text(status.content)
+                        }
+                    }
+                }
+            }
+
             // 显示所有普通消息
             messages.forEach { message ->
                 MessageItem(
@@ -916,39 +951,26 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                     }
                 )
             }
-            
-            // 显示系统状态消息（灰色）
-            if (statusMessages.isNotEmpty()) {
-                Div({
-                    style {
-                        backgroundColor(Color("#F5F5F5"))
-                        borderRadius(8.px)
-                        padding(10.px, 14.px)
-                        marginBottom(8.px)
-                        property("border-left", "3px solid #9E9E9E")
-                    }
-                }) {
-                    statusMessages.forEach { status ->
-                        Div({
-                            style {
-                                color(Color("#757575"))
-                                fontSize(13.px)
-                                fontStyle("italic")
-                                marginBottom(4.px)
-                                display(DisplayStyle.Flex)
-                                alignItems(AlignItems.Center)
-                                property("gap", "8px")
-                            }
-                        }) {
-                            Text(status.content)
-                        }
-                    }
-                }
-            }
-            
+
             // 显示临时消息（如果有）
             transientMessage?.let { message ->
-                TransientMessageItem(message)
+                if (
+                    message.content.isNotBlank() &&
+                    message.currentStep == null &&
+                    message.totalSteps == null &&
+                    !isLikelyAgentStatusContent(message.content)
+                ) {
+                    // 进入最终答案流阶段后，强制按 AI 正文样式渲染（即使后端 category 仍是 AGENT_STATUS）
+                    MessageItem(
+                        message = message.copy(category = com.silk.shared.models.MessageCategory.NORMAL),
+                        isTransient = true,
+                        currentUserId = user.id,
+                        groupId = group.id
+                    )
+                } else {
+                    // 处理中阶段（含工具调用与步骤）按临时状态样式显示
+                    TransientMessageItem(message)
+                }
             }
         }
         
@@ -2752,6 +2774,9 @@ fun AIMessageCard(
     var isExpanded by remember { mutableStateOf(false) }  // 默认收起
     val isLongContent = message.content.length > 500
     val effectiveExpanded = if (isTransient) true else isExpanded
+    val collapsedPreview = remember(message.content) {
+        message.content.trimStart().take(200).ifBlank { "（内容已折叠，点击展开）" }
+    }
     
     Div({
         classes(SilkStylesheet.aiMessageCard)
@@ -2854,7 +2879,7 @@ fun AIMessageCard(
                     property("font-style", "italic")
                 }
             }) {
-                Text("${message.content.take(200)}...")
+                Text("$collapsedPreview...")
             }
         }
         
@@ -3486,6 +3511,25 @@ fun formatTime(timestamp: Long): String {
     val seconds = totalSeconds % 60
     
     return "${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}"
+}
+
+private fun isLikelyAgentStatusContent(content: String): Boolean {
+    val text = content.trim()
+    if (text.isBlank()) return false
+
+    val statusHints = listOf(
+        "正在处理",
+        "思考中",
+        "使用工具",
+        "执行:",
+        "处理中",
+        "检索",
+        "搜索",
+        "🤔",
+        "🔧",
+        "⏳"
+    )
+    return statusHints.any { hint -> text.contains(hint) }
 }
 
 /**
