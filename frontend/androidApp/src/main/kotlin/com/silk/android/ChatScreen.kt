@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -1626,8 +1627,14 @@ fun AIMessageCardAndroid(
     onCopy: (String) -> Unit = {},
     onForward: (Message) -> Unit = {}
 ) {
-    var isExpanded by remember { mutableStateOf(true) }
+    // 使用 rememberSaveable 确保状态在重组时保持
+    var isExpanded by rememberSaveable { mutableStateOf(true) }
     val isLongContent = message.content.length > 500
+    
+    // 调试日志
+    LaunchedEffect(message.id) {
+        println("🤖 AIMessageCardAndroid: messageId=${message.id}, contentLength=${message.content.length}, isLongContent=$isLongContent, isExpanded=$isExpanded")
+    }
     
     Card(
         modifier = Modifier
@@ -1682,13 +1689,21 @@ fun AIMessageCardAndroid(
                 if (isLongContent) {
                     Spacer(modifier = Modifier.weight(1f))
                     
-                    TextButton(
-                        onClick = { isExpanded = !isExpanded },
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                    Box(
+                        modifier = Modifier
+                            .background(
+                                color = if (isExpanded) Color.Transparent else Color(0x1AC9A86C),
+                                shape = RoundedCornerShape(4.dp)
+                            )
+                            .clickable { 
+                                isExpanded = !isExpanded 
+                            }
+                            .padding(horizontal = 12.dp, vertical = 6.dp)
                     ) {
                         Text(
-                            text = if (isExpanded) "收起" else "展开",
-                            style = MaterialTheme.typography.bodySmall
+                            text = if (isExpanded) "▼ 收起" else "▶ 展开",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary
                         )
                     }
                 }
