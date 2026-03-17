@@ -1684,7 +1684,7 @@ fun AIMessageCardAndroid(
                     
                     TextButton(
                         onClick = { isExpanded = !isExpanded },
-                        modifier = Modifier.padding(0.dp)
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
                     ) {
                         Text(
                             text = if (isExpanded) "收起" else "展开",
