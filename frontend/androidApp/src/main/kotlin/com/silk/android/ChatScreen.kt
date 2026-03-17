@@ -18,7 +18,6 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
-import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -1660,8 +1659,7 @@ fun AIMessageCardAndroid(
     Card(
         modifier = Modifier
             .fillMaxWidth(0.95f)
-            .padding(horizontal = 8.dp, vertical = 4.dp)
-            .animateContentSize(animationSpec = tween(durationMillis = 200)),
+            .padding(horizontal = 8.dp, vertical = 4.dp),
         colors = CardDefaults.cardColors(
             containerColor = Color(0xFFF8F6F0)  // 温暖的奶白色背景
         ),
