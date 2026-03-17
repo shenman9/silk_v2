@@ -1004,8 +1004,24 @@ fun ChatScreen(appState: AppState) {
                                     scope.launch {
                                         if (isExpanded) {
                                             // 展开：等待动画完成后滚动到消息开头
+                                            // 由于 reverseLayout=true，需要先滚动到消息位置
+                                            // 然后通过调整 scrollOffset 使消息顶部可见
                                             kotlinx.coroutines.delay(220)
-                                            listState.animateScrollToItem(index = actualIndex, scrollOffset = 0)
+                                            // 先滚动到该消息
+                                            listState.scrollToItem(index = actualIndex, scrollOffset = 0)
+                                            // 再等待一下让布局稳定
+                                            kotlinx.coroutines.delay(50)
+                                            // 获取该 item 的布局信息
+                                            val layoutInfo = listState.layoutInfo.visibleItemsInfo.find { it.index == actualIndex }
+                                            if (layoutInfo != null) {
+                                                // 计算需要的 offset 使消息顶部对齐到屏幕顶部
+                                                val viewportHeight = listState.layoutInfo.viewportSize.height
+                                                val itemSize = layoutInfo.size
+                                                // offset 使 item 顶部对齐到 viewport 顶部
+                                                // 对于 reverseLayout=true，scrollOffset 是负值表示向上滚动
+                                                val desiredOffset = -(viewportHeight - itemSize)
+                                                listState.animateScrollToItem(index = actualIndex, scrollOffset = desiredOffset.coerceAtMost(0))
+                                            }
                                         } else {
                                             // 收起：等待动画完成，保持位置稳定
                                             kotlinx.coroutines.delay(220)
