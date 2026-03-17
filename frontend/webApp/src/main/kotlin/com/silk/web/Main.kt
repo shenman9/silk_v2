@@ -2749,7 +2749,7 @@ fun AIMessageCard(
     onCopy: (String) -> Unit = {},
     onForward: (Message) -> Unit = {}
 ) {
-    var isExpanded by remember { mutableStateOf(true) }
+    var isExpanded by remember { mutableStateOf(false) }  // 默认收起
     val isLongContent = message.content.length > 500
     
     Div({

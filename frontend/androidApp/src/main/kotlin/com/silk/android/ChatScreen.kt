@@ -983,8 +983,8 @@ fun ChatScreen(appState: AppState) {
                                     }
                                 }
                             },
-                            // AI 消息展开状态
-                            isAIExpanded = aiMessageExpandedStates[message.id] ?: true,
+                            // AI 消息展开状态（默认收起，只有长内容才需要展开/收起功能）
+                            isAIExpanded = aiMessageExpandedStates[message.id] ?: false,
                             onAIExpandChange = { messageId, isExpanded ->
                                 // 获取消息在列表中的索引（考虑 reverseLayout=true）
                                 val reversedIndex = messages.indexOfFirst { it.id == messageId }
