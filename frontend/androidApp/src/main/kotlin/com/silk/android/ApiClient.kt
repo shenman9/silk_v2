@@ -334,6 +334,20 @@ object ApiClient {
     }
     
     /**
+     * 开始/获取与 Silk AI 的专属私聊会话
+     */
+    suspend fun startSilkPrivateChat(userId: String): PrivateChatResponse = withContext(Dispatchers.IO) {
+        try {
+            val body = """{"userId":"$userId"}"""
+            val response = post("/api/silk-private-chat", body)
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            println("获取Silk私聊会话失败: $e")
+            PrivateChatResponse(false, "网络错误")
+        }
+    }
+    
+    /**
      * 获取群组成员列表
      */
     suspend fun getGroupMembers(groupId: String): GroupMembersResponse = withContext(Dispatchers.IO) {

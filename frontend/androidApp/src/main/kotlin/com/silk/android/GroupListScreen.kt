@@ -16,6 +16,7 @@ import androidx.compose.material.icons.filled.GroupAdd
 import androidx.compose.material.icons.filled.Logout
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -297,6 +298,32 @@ fun GroupListScreen(appState: AppState) {
                                     Icon(
                                         Icons.Default.GroupAdd, 
                                         contentDescription = "加入",
+                                        modifier = Modifier.size(22.dp)
+                                    )
+                                }
+                                
+                                // 🤖 与 Silk 对话按钮
+                                IconButton(
+                                    onClick = {
+                                        scope.launch {
+                                            val userId = appState.currentUser?.id ?: return@launch
+                                            val response = ApiClient.startSilkPrivateChat(userId)
+                                            if (response.success && response.group != null) {
+                                                println("✅ 打开与 Silk 的对话: ${response.group!!.name}")
+                                                appState.selectGroup(response.group!!)
+                                            } else {
+                                                println("❌ 打开 Silk 对话失败: ${response.message}")
+                                                Toast.makeText(context, response.message, Toast.LENGTH_SHORT).show()
+                                            }
+                                        }
+                                    },
+                                    colors = IconButtonDefaults.iconButtonColors(
+                                        contentColor = Color(0xFF7BA8C9) // 蓝色，区别于其他按钮
+                                    )
+                                ) {
+                                    Icon(
+                                        Icons.Default.SmartToy,
+                                        contentDescription = "与 Silk 对话",
                                         modifier = Modifier.size(22.dp)
                                     )
                                 }

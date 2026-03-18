@@ -13,6 +13,9 @@ import io.ktor.websocket.*
 import io.ktor.http.*
 import kotlinx.coroutines.channels.consumeEach
 import kotlinx.serialization.json.Json
+import org.jetbrains.exposed.sql.*
+import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
+import org.jetbrains.exposed.sql.transactions.transaction
 import java.io.File
 import java.util.*
 import java.util.concurrent.ConcurrentHashMap
@@ -947,6 +950,113 @@ fun Application.configureRouting() {
         
         // 文件上传/下载 API
         fileRoutes()
+        
+        // ==================== 与 Silk 直接对话 API ====================
+        post("/api/silk-private-chat") {
+            try {
+                val request = call.receive<StartSilkPrivateChatRequest>()
+                
+                // 获取用户信息
+                val user = UserRepository.findUserById(request.userId)
+                if (user == null) {
+                    call.respond(PrivateChatResponse(false, "用户不存在"))
+                    return@post
+                }
+                
+                // Silk AI Agent ID
+                val silkAgentId = "silk_ai_agent"
+                
+                // 查找用户与 Silk 的专属私聊群组
+                // 使用特殊命名规则来区分 Silk 私聊：以 "[Silk] " 开头
+                val existingGroup = transaction {
+                    val userGroups = GroupMembers
+                        .select { GroupMembers.userId eq request.userId }
+                        .map { it[GroupMembers.groupId] }
+                    
+                    for (groupId in userGroups) {
+                        val group = Groups.select { Groups.id eq groupId }.singleOrNull()
+                        if (group != null && group[Groups.name].startsWith("[Silk] ")) {
+                            // 检查 Silk AI 是否也在这个群组中
+                            val silkInGroup = GroupMembers.select {
+                                (GroupMembers.groupId eq groupId) and (GroupMembers.userId eq silkAgentId)
+                            }.count() > 0
+                            
+                            if (silkInGroup) {
+                                // 检查群组是否只有2个成员（用户 + Silk）
+                                val memberCount = GroupMembers.select { GroupMembers.groupId eq groupId }.count()
+                                if (memberCount == 2L) {
+                                    val hostUser = UserRepository.findUserById(group[Groups.hostId])
+                                    return@transaction com.silk.backend.database.Group(
+                                        id = group[Groups.id],
+                                        name = group[Groups.name],
+                                        invitationCode = group[Groups.invitationCode],
+                                        hostId = group[Groups.hostId],
+                                        hostName = hostUser?.fullName ?: "",
+                                        createdAt = group[Groups.createdAt].toString()
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    null
+                }
+                
+                if (existingGroup != null) {
+                    println("✅ 找到用户 ${user.fullName} 与 Silk 的私聊: ${existingGroup.name}")
+                    call.respond(PrivateChatResponse(true, "打开 Silk 对话", existingGroup, isNew = false))
+                } else {
+                    // 创建新的 Silk 私聊群组
+                    val groupName = "[Silk] ${user.fullName} 的专属对话"
+                    val groupId = java.util.UUID.randomUUID().toString()
+                    val invitationCode = java.util.UUID.randomUUID().toString().substring(0, 6).uppercase()
+                    
+                    val newGroup = transaction {
+                        // 创建群组
+                        Groups.insert {
+                            it[id] = groupId
+                            it[name] = groupName
+                            it[Groups.invitationCode] = invitationCode
+                            it[hostId] = request.userId // 用户作为群主
+                        }
+                        
+                        // 添加用户作为成员
+                        GroupMembers.insert {
+                            it[GroupMembers.groupId] = groupId
+                            it[GroupMembers.userId] = request.userId
+                            it[GroupMembers.role] = MemberRole.HOST.name
+                        }
+                        
+                        // 添加 Silk AI 作为成员
+                        GroupMembers.insert {
+                            it[GroupMembers.groupId] = groupId
+                            it[GroupMembers.userId] = silkAgentId
+                            it[GroupMembers.role] = MemberRole.GUEST.name
+                        }
+                        
+                        // 创建聊天历史文件夹
+                        val sessionDir = java.io.File("chat_history/group_$groupId")
+                        sessionDir.mkdirs()
+                        println("📁 Silk 私聊历史文件夹已创建: ${sessionDir.path}")
+                        
+                        com.silk.backend.database.Group(
+                            id = groupId,
+                            name = groupName,
+                            invitationCode = invitationCode,
+                            hostId = request.userId,
+                            hostName = user.fullName,
+                            createdAt = System.currentTimeMillis().toString()
+                        )
+                    }
+                    
+                    println("🆕 创建用户 ${user.fullName} 与 Silk 的私聊: $groupName")
+                    call.respond(PrivateChatResponse(true, "创建 Silk 对话", newGroup, isNew = true))
+                }
+            } catch (e: Exception) {
+                println("❌ 创建 Silk 私聊失败: ${e.message}")
+                e.printStackTrace()
+                call.respond(HttpStatusCode.BadRequest, PrivateChatResponse(false, "请求格式错误"))
+            }
+        }
         
         // ==================== 消息发送 API（用于转发等功能） ====================
         post("/api/messages/send") {

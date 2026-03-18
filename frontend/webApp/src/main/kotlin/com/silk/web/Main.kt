@@ -1168,7 +1168,9 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                     property("gap", "12px")
                 }
             }) {
-                // @Silk 快捷按钮
+                // @Silk 快捷按钮（在 Silk 私聊中隐藏）
+                val isSilkPrivateChat = group.name.startsWith("[Silk]")
+                if (!isSilkPrivateChat) {
                 Div({
                     style {
                         display(DisplayStyle.Flex)
@@ -1222,6 +1224,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         Text("@Silk")
                     }
                 }
+                }
                 
                 // 第一行：输入框占据整行
                 // 发送消息的函数
@@ -1272,7 +1275,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                                 }
                             }
                         }
-                        attr("placeholder", strings.messageInputPlaceholder)
+                        attr("placeholder", if (group.name.startsWith("[Silk]")) strings.silkChatInputPlaceholder else strings.messageInputPlaceholder)
                         attr("rows", "2")
                         attr("id", "chat-input")
                         style {

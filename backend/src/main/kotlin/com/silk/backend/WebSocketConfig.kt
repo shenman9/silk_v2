@@ -262,21 +262,33 @@ class ChatServer(
         }
         
         // Silk AI 回复逻辑
-        // 新逻辑：普通消息只索引不回复，@silk 消息触发 AI 回复
+        // 检查是否是 Silk 专属私聊会话（群组名以 "[Silk]" 开头）
+        val isSilkPrivateChat = getGroupDisplayName(sessionName)?.startsWith("[Silk]") == true
+        
         if (message.userId != SilkAgent.AGENT_ID && message.type == MessageType.TEXT && !message.isTransient) {
             messagesSinceAgentResponse++
             
-            // 检查是否是 @silk 消息
-            if (message.content.startsWith("@Silk") || message.content.startsWith("@silk")) {
-                val silkContent = message.content
-                    .removePrefix("@Silk").removePrefix("@silk")
-                    .trim()
+            // 在 Silk 私聊中，所有消息都直接触发 AI 回复
+            // 在普通群聊中，需要 @silk 才能触发 AI 回复
+            val shouldTriggerAI = isSilkPrivateChat || 
+                                  message.content.startsWith("@Silk") || 
+                                  message.content.startsWith("@silk")
+            
+            if (shouldTriggerAI) {
+                // 提取实际内容（移除 @silk 前缀，如果是私聊则直接使用原消息）
+                val silkContent = if (isSilkPrivateChat) {
+                    message.content  // Silk 私聊中直接使用原消息
+                } else {
+                    message.content
+                        .removePrefix("@Silk").removePrefix("@silk")
+                        .trim()
+                }
                 
                 // 判断是否是角色设置消息
                 val isRolePrompt = isRolePromptMessage(silkContent)
                 
-                if (silkContent.isBlank()) {
-                    // 只有 @silk，显示帮助信息
+                if (!isSilkPrivateChat && silkContent.isBlank()) {
+                    // 只有 @silk（非私聊），显示帮助信息
                     println("📖 [broadcast] @silk 帮助提示")
                     CoroutineScope(Dispatchers.IO).launch {
                         sendAgentStatus("""
@@ -305,7 +317,8 @@ class ChatServer(
                     }
                 } else {
                     // 普通问题 - 使用搜索 + AI 回复
-                    println("💬 [broadcast] @silk 问题: ${silkContent.take(50)}...")
+                    val logPrefix = if (isSilkPrivateChat) "[Silk私聊]" else "[@silk]"
+                    println("💬 [broadcast] $logPrefix 问题: ${silkContent.take(50)}...")
                     
                     CoroutineScope(Dispatchers.IO).launch {
                         try {

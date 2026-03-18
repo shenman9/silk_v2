@@ -1013,26 +1013,29 @@ fun ChatScreen(appState: AppState) {
                             .fillMaxWidth()
                             .padding(8.dp)
                     ) {
-                        // @Silk 快捷按钮
-                        Surface(
-                            onClick = { 
-                                val text = "@Silk "
-                                messageText = TextFieldValue(
-                                    text = text,
-                                    selection = TextRange(text.length)  // 光标移动到末尾
+                        // @Silk 快捷按钮（在 Silk 私聊中隐藏）
+                        val isSilkPrivateChat = group.name.startsWith("[Silk]")
+                        if (!isSilkPrivateChat) {
+                            Surface(
+                                onClick = { 
+                                    val text = "@Silk "
+                                    messageText = TextFieldValue(
+                                        text = text,
+                                        selection = TextRange(text.length)  // 光标移动到末尾
+                                    )
+                                },
+                                color = SilkColors.primary.copy(alpha = 0.15f),
+                                shape = MaterialTheme.shapes.small
+                            ) {
+                                Text(
+                                    text = "@Silk",
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = SilkColors.primary
                                 )
-                            },
-                            color = SilkColors.primary.copy(alpha = 0.15f),
-                            shape = MaterialTheme.shapes.small
-                        ) {
-                            Text(
-                                text = "@Silk",
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = SilkColors.primary
-                            )
+                            }
                         }
-                        
+
                         Spacer(modifier = Modifier.height(8.dp))
                         
                         // 输入框容器（用于 @ 提及下拉）
@@ -1134,7 +1137,7 @@ fun ChatScreen(appState: AppState) {
                                             }
                                         },
                                         modifier = Modifier.weight(1f),
-                                        placeholder = { Text("输入消息... @ 提及成员 / @silk 提问AI") },
+                                        placeholder = { Text(if (group.name.startsWith("[Silk]")) "直接输入消息与 Silk 对话..." else "输入消息... @ 提及成员 / @silk 提问AI") },
                                         maxLines = 3
                                     )
                                     
