@@ -37,6 +37,9 @@ class DirectModelAgent(
     
     private val json = Json {
         ignoreUnknownKeys = true
+        // vLLM/OpenAI tool calling requires fields like `tool_calls[].type`.
+        // kotlinx.serialization omits default-valued fields unless encodeDefaults=true.
+        encodeDefaults = true
         prettyPrint = true
     }
     
