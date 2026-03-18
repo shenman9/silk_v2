@@ -56,6 +56,14 @@ class ChatHistoryManager(
         val safeName = sessionName.replace(Regex("[^a-zA-Z0-9_-]"), "_")
         return "$baseDir/$safeName"
     }
+
+    private fun getSessionFile(sessionName: String): File {
+        return File("${getSessionDir(sessionName)}/session.json")
+    }
+
+    private fun getHistoryFile(sessionName: String): File {
+        return File("${getSessionDir(sessionName)}/chat_history.json")
+    }
     
     /**
      * 备份损坏的文件
@@ -109,9 +117,14 @@ class ChatHistoryManager(
         
         saveSessionData(sessionName, sessionData)
         
-        // 创建空的聊天历史
-        val chatHistory = ChatHistory(sessionId = sessionData.sessionId)
-        saveChatHistory(sessionName, chatHistory)
+        // 仅在历史文件不存在时创建空历史，避免覆盖已有数据
+        val historyFile = getHistoryFile(sessionName)
+        if (!historyFile.exists()) {
+            val chatHistory = ChatHistory(sessionId = sessionData.sessionId)
+            saveChatHistory(sessionName, chatHistory)
+        } else {
+            println("🛡️ 检测到已有历史文件，跳过空历史初始化: $sessionName")
+        }
         
         println("✅ 会话已创建: $sessionName (${sessionData.sessionId})")
         return sessionData
@@ -128,11 +141,30 @@ class ChatHistoryManager(
         }
         
         // 检查是否有损坏的文件
-        val sessionFile = File("${getSessionDir(sessionName)}/session.json")
+        val sessionFile = getSessionFile(sessionName)
         if (sessionFile.exists()) {
             // 文件存在但解析失败，说明文件损坏，不要创建新会话
             println("⚠️ 会话文件损坏，拒绝创建新会话: $sessionName")
             return null
+        }
+
+        // session.json 不存在，但 chat_history.json 存在时，修复 session 元数据且绝不覆盖历史
+        val historyFile = getHistoryFile(sessionName)
+        if (historyFile.exists()) {
+            val history = loadChatHistory(sessionName)
+            if (history == null) {
+                println("⚠️ 检测到历史文件但无法解析，拒绝创建新会话避免覆盖: $sessionName")
+                return null
+            }
+
+            val recoveredSessionData = SessionData(
+                sessionId = history.sessionId.ifBlank { generateSessionId() },
+                sessionName = sessionName,
+                createdAt = System.currentTimeMillis()
+            )
+            saveSessionData(sessionName, recoveredSessionData)
+            println("🔧 已从历史文件恢复 session 元数据: $sessionName")
+            return recoveredSessionData
         }
         
         // 文件不存在，可以安全创建
@@ -234,7 +266,16 @@ class ChatHistoryManager(
         sessionName: String,
         message: Message
     ) {
-        val chatHistory = loadChatHistory(sessionName) ?: ChatHistory(sessionId = sessionName)
+        val historyFile = getHistoryFile(sessionName)
+        val chatHistory = loadChatHistory(sessionName) ?: run {
+            // 如果历史文件存在但加载失败，拒绝写入，避免覆盖潜在可恢复数据
+            if (historyFile.exists()) {
+                println("⚠️ 历史文件存在但无法解析，跳过写入避免覆盖: $sessionName")
+                return
+            }
+            val sessionId = loadSessionData(sessionName)?.sessionId ?: sessionName
+            ChatHistory(sessionId = sessionId)
+        }
         
         val entry = ChatHistoryEntry(
             messageId = message.id,
@@ -254,7 +295,15 @@ class ChatHistoryManager(
      * @Silk 消息中的角色指令会被保存，用于后续 AI 回复
      */
     fun updateRolePrompt(sessionName: String, rolePrompt: String?) {
-        val chatHistory = loadChatHistory(sessionName) ?: ChatHistory(sessionId = sessionName)
+        val historyFile = getHistoryFile(sessionName)
+        val chatHistory = loadChatHistory(sessionName) ?: run {
+            if (historyFile.exists()) {
+                println("⚠️ 历史文件存在但无法解析，跳过角色提示写入避免覆盖: $sessionName")
+                return
+            }
+            val sessionId = loadSessionData(sessionName)?.sessionId ?: sessionName
+            ChatHistory(sessionId = sessionId)
+        }
         chatHistory.rolePrompt = rolePrompt
         saveChatHistory(sessionName, chatHistory)
         println("🎭 角色提示已更新: $sessionName -> ${rolePrompt?.take(50)}...")

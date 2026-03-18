@@ -1,5 +1,6 @@
 package com.silk.backend.database
 
+import com.silk.backend.ChatHistoryBackupManager
 import org.jetbrains.exposed.sql.*
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
 import org.jetbrains.exposed.sql.transactions.transaction
@@ -368,6 +369,12 @@ object GroupRepository {
             // 删除聊天历史目录
             val sessionDir = java.io.File("chat_history/group_$groupId")
             if (sessionDir.exists()) {
+                // 先备份再删除，避免误删导致历史不可恢复
+                ChatHistoryBackupManager.backupGroupHistory(
+                    groupId = groupId,
+                    backupType = ChatHistoryBackupManager.BackupType.GROUP_DELETED,
+                    reason = "deleteGroupInternal before deleteRecursively"
+                )
                 sessionDir.deleteRecursively()
                 println("📁 群组聊天历史目录已删除: ${sessionDir.path}")
             }
