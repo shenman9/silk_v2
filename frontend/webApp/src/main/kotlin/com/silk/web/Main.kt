@@ -564,6 +564,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
     var showMentionMenu by remember { mutableStateOf(false) }
     var mentionSearchText by remember { mutableStateOf("") }
     var mentionStartIndex by remember { mutableStateOf(-1) }
+    var mentionMenuPosition by remember { mutableStateOf(Pair(0.0, 0.0)) } // (left, bottom)
     
     // 消息撤回相关状态：正在撤回中的消息ID集合，防止重复点击
     var recallingMessageIds by remember { mutableStateOf(setOf<String>()) }
@@ -605,6 +606,15 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
         
         // Reset flag when group changes
         hasSentDefaultInstruction = false
+        
+        // 加载群成员列表（用于 @ mention 功能）
+        try {
+            val membersResponse = ApiClient.getGroupMembers(group.id)
+            groupMembers = membersResponse.members.sortedByDescending { it.id == group.hostId }
+            console.log("✅ 群成员列表已加载，共 ${groupMembers.size} 人")
+        } catch (e: dynamic) {
+            console.error("❌ 加载群成员列表失败:", e.toString())
+        }
         
         // 延迟1秒，确保页面已完全渲染
         kotlinx.coroutines.delay(1000)
@@ -1262,6 +1272,12 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                             if (newValue.length > oldValue.length) {
                                 val lastChar = newValue.lastOrNull()
                                 if (lastChar == '@') {
+                                    // 计算输入框位置用于 fixed 定位菜单
+                                    val input = document.getElementById("chat-input") as? org.w3c.dom.HTMLElement
+                                    if (input != null) {
+                                        val rect = input.getBoundingClientRect()
+                                        mentionMenuPosition = Pair(rect.left, window.innerHeight - rect.top + 4)
+                                    }
                                     showMentionMenu = true
                                     mentionStartIndex = newValue.length - 1
                                     mentionSearchText = ""
@@ -1290,14 +1306,13 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         }
                     }
                     
-                    // @ Mention 下拉菜单
+                    // @ Mention 下拉菜单 - 使用 fixed 定位避免被 overflow:hidden 裁剪
                     if (showMentionMenu) {
                         Div({
                             style {
-                                property("position", "absolute")
-                                property("bottom", "100%")
-                                property("left", "0")
-                                property("margin-bottom", "4px")
+                                property("position", "fixed")
+                                property("left", "${mentionMenuPosition.first}px")
+                                property("bottom", "${mentionMenuPosition.second}px")
                                 backgroundColor(Color(SilkColors.surface))
                                 border {
                                     width(1.px)
@@ -1306,7 +1321,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                                 }
                                 borderRadius(8.px)
                                 property("box-shadow", "0 4px 12px rgba(0,0,0,0.15)")
-                                property("z-index", "1000")
+                                property("z-index", "9999")
                                 property("max-height", "200px")
                                 property("overflow-y", "auto")
                                 property("min-width", "200px")

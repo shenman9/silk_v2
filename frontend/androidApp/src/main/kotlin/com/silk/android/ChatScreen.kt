@@ -297,6 +297,15 @@ fun ChatScreen(appState: AppState) {
         addLog("   群组ID: ${group.id}")
         addLog("━━━━━━━━━━━━━━━━━━━━━━━━")
         
+        // 加载群成员列表（用于 @ mention 功能）
+        try {
+            val membersResponse = ApiClient.getGroupMembers(group.id)
+            groupMembers = membersResponse.members.sortedByDescending { it.id == group.hostId }
+            addLog("✅ 群成员列表已加载，共 ${groupMembers.size} 人")
+        } catch (e: Exception) {
+            addLog("❌ 加载群成员列表失败: ${e.message}")
+        }
+        
         // 在单独的协程中保持连接
         launch {
             try {
