@@ -117,4 +117,8 @@ object Strings_EN : Strings {
     override val noContactsYet = "No contacts yet"
     override val addFirstContact = "Add first contact"
     override val pendingStatus = "Pending"
+    
+    // Silk AI Chat
+    override val chatWithSilk = "Chat with Silk"
+    override val silkChatInputPlaceholder = "Ask Silk anything... (Enter to send)"
 }

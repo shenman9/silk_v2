@@ -258,6 +258,14 @@ data class StartPrivateChatRequest(
 )
 
 /**
+ * 开始与 Silk AI 直接对话请求
+ */
+@Serializable
+data class StartSilkPrivateChatRequest(
+    val userId: String
+)
+
+/**
  * 发送消息请求（用于转发等功能）
  */
 @Serializable

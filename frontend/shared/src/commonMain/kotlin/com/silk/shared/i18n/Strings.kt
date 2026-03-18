@@ -122,6 +122,10 @@ interface Strings {
     val noContactsYet: String  // "No contacts yet"
     val addFirstContact: String  // "Add first contact"
     val pendingStatus: String  // "Pending"
+    
+    // Silk AI chat
+    val chatWithSilk: String  // "Chat with Silk"
+    val silkChatInputPlaceholder: String  // "Type message to Silk..."
 }
 
 /**

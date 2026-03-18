@@ -350,6 +350,36 @@ fun GroupListScene(appState: WebAppState) {
                     Text("👤 ${strings.contactsButton}")
                 }
                 
+                // 🤖 与 Silk 对话按钮
+                Button({
+                    style {
+                        padding(10.px, 18.px)
+                        backgroundColor(Color("#7BA8C9"))
+                        color(Color.white)
+                        border { width(0.px) }
+                        borderRadius(8.px)
+                        property("cursor", "pointer")
+                        property("box-shadow", "0 2px 8px rgba(123, 168, 201, 0.4)")
+                        property("transition", "all 0.2s ease")
+                        fontSize(14.px)
+                        property("font-weight", "600")
+                    }
+                    onClick { 
+                        scope.launch {
+                            val userId = appState.currentUser?.id ?: return@launch
+                            val response = ApiClient.startSilkPrivateChat(userId)
+                            if (response.success && response.group != null) {
+                                console.log("✅ 打开与 Silk 的对话: ${response.group!!.name}")
+                                appState.selectGroup(response.group!!)
+                            } else {
+                                console.log("❌ 打开 Silk 对话失败: ${response.message}")
+                            }
+                        }
+                    }
+                }) {
+                    Text("🤖 ${strings.chatWithSilk}")
+                }
+                
                 // 设置按钮
                 Button({
                     style {
