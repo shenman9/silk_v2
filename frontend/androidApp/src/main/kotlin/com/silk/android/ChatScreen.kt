@@ -614,8 +614,9 @@ fun ChatScreen(appState: AppState) {
                                         .filter { selectedMessages.contains(it.id) }
                                         .sortedBy { it.timestamp }
                                         .joinToString("\n\n") { msg ->
-                                            val time = SimpleDateFormat("HH:mm", java.util.Locale.getDefault())
-                                                .format(java.util.Date(msg.timestamp))
+                                            val time = SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).apply {
+                                                timeZone = java.util.TimeZone.getTimeZone("Asia/Shanghai")
+                                            }.format(java.util.Date(msg.timestamp))
                                             "[$time] ${msg.userName}:\n${msg.content}"
                                         }
                                     
@@ -1536,8 +1537,9 @@ fun ChatScreen(appState: AppState) {
                         .filter { selectedMessages.contains(it.id) }
                         .sortedBy { it.timestamp }
                         .joinToString("\n\n") { msg ->
-                            val time = SimpleDateFormat("HH:mm", java.util.Locale.getDefault())
-                                .format(java.util.Date(msg.timestamp))
+                            val time = SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).apply {
+                                timeZone = java.util.TimeZone.getTimeZone("Asia/Shanghai")
+                            }.format(java.util.Date(msg.timestamp))
                             "[$time] ${msg.userName}: ${msg.content}"
                         }
                     
@@ -1593,8 +1595,9 @@ fun ChatScreen(appState: AppState) {
                             .filter { selectedMessages.contains(it.id) }
                             .sortedBy { it.timestamp }
                             .joinToString("\n\n") { msg ->
-                                val time = SimpleDateFormat("HH:mm", java.util.Locale.getDefault())
-                                    .format(java.util.Date(msg.timestamp))
+                                val time = SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).apply {
+                                    timeZone = java.util.TimeZone.getTimeZone("Asia/Shanghai")
+                                }.format(java.util.Date(msg.timestamp))
                                 "[$time] ${msg.userName}: ${msg.content}"
                             }
                         
@@ -2132,7 +2135,9 @@ fun MessageItem(
                     !isSystemMessage && 
                     !isTransient
     
-    val dateFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
+    val dateFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).apply {
+        timeZone = java.util.TimeZone.getTimeZone("Asia/Shanghai")
+    }
     val timeString = dateFormat.format(Date(message.timestamp))
     
     // 检测PDF下载链接
@@ -3188,11 +3193,30 @@ fun formatFileSize(size: Long): String {
 }
 
 /**
- * 格式化时间
+ * 格式化时间 - 使用上海时区 (UTC+8)
  */
 fun formatTime(timestamp: Long): String {
     if (timestamp == 0L) return ""
     val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
+    sdf.timeZone = TimeZone.getTimeZone("Asia/Shanghai")
+    return sdf.format(Date(timestamp))
+}
+
+/**
+ * 格式化时间为 HH:mm 格式 - 使用上海时区 (UTC+8)
+ */
+fun formatTimeHM(timestamp: Long): String {
+    val sdf = SimpleDateFormat("HH:mm", Locale.getDefault())
+    sdf.timeZone = TimeZone.getTimeZone("Asia/Shanghai")
+    return sdf.format(Date(timestamp))
+}
+
+/**
+ * 格式化时间为 HH:mm:ss 格式 - 使用上海时区 (UTC+8)
+ */
+fun formatTimeHMS(timestamp: Long): String {
+    val sdf = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
+    sdf.timeZone = TimeZone.getTimeZone("Asia/Shanghai")
     return sdf.format(Date(timestamp))
 }
 

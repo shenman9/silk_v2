@@ -18,6 +18,8 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 
+// 时间格式化函数在文件后面定义
+
 // 文件信息数据类
 data class FileInfo(
     val name: String,
@@ -3504,8 +3506,18 @@ fun generateRandomId(): String {
         .joinToString("")
 }
 
+/**
+ * 格式化时间戳为 HH:mm:ss 格式（上海时区 UTC+8）
+ * 时间戳是UTC毫秒数，转换为上海时区需要加8小时偏移
+ * @param timestamp 毫秒级时间戳
+ * @return 格式化后的时间字符串
+ */
 fun formatTime(timestamp: Long): String {
-    val totalSeconds = (timestamp / 1000).toInt()
+    // 时间戳是UTC时间，转换为上海时区（UTC+8）
+    val shanghaiOffsetMs = 8 * 60 * 60 * 1000L // 8小时的毫秒数
+    val shanghaiTime = timestamp + shanghaiOffsetMs
+    
+    val totalSeconds = (shanghaiTime / 1000).toInt()
     val hours = (totalSeconds / 3600) % 24
     val minutes = (totalSeconds % 3600) / 60
     val seconds = totalSeconds % 60

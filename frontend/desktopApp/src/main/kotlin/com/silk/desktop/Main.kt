@@ -316,8 +316,9 @@ fun MessageBubble(
 ) {
     val isCurrentUser = message.userId == currentUserId
     val timeString = remember(message.timestamp) {
-        SimpleDateFormat("HH:mm:ss", Locale.getDefault())
-            .format(Date(message.timestamp))
+        SimpleDateFormat("HH:mm:ss", Locale.getDefault()).apply {
+            timeZone = java.util.TimeZone.getTimeZone("Asia/Shanghai")
+        }.format(Date(message.timestamp))
     }
     
     // 检测是否为PDF下载消息
