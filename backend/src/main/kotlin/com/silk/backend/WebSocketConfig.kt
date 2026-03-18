@@ -508,6 +508,10 @@ class ChatServer(
             appendLine("你可以使用工具来搜索文件、搜索互联网、读取文件等。请根据用户的问题选择合适的工具。")
         }
         
+        // 加载聊天历史并设置到 Agent（用于群组统计等功能）
+        val chatHistory = historyManager.loadChatHistory(sessionName)
+        directModelAgent.setGroupChatHistory(chatHistory?.messages ?: emptyList())
+        
         // 使用 DirectModelAgent 直接调用模型
         var fullResponse = ""
         try {

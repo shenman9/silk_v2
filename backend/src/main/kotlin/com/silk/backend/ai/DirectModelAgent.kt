@@ -46,6 +46,16 @@ class DirectModelAgent(
     // Weaviate 搜索客户端（用于搜索已上传的 PDF 等文件）
     private val weaviateClient = WeaviateClient(AIConfig.requireWeaviateUrl())
     
+    // 群聊历史记录（用于统计成员发言等）
+    private var groupChatHistory: List<com.silk.backend.models.ChatHistoryEntry> = emptyList()
+    
+    /**
+     * 设置群聊历史记录（用于统计成员发言等）
+     */
+    fun setGroupChatHistory(history: List<com.silk.backend.models.ChatHistoryEntry>) {
+        groupChatHistory = history
+    }
+    
     /**
      * OpenAI 兼容的消息格式
      */
@@ -693,6 +703,23 @@ class DirectModelAgent(
                         put("required", requiredArray("command"))
                     }
                 )
+            ),
+            // 群组统计工具
+            Tool(
+                function = ToolDefinition(
+                    name = "get_group_stats",
+                    description = "获取当前群组的统计信息，包括成员数量、发言统计等。当用户询问群里有多少人、谁说了多少话时使用。",
+                    parameters = buildJsonObject {
+                        put("type", "object")
+                        put("properties", buildJsonObject {
+                            put("detail_level", buildJsonObject {
+                                put("type", "string")
+                                put("description", "统计详细程度：'summary' 只返回概要，'detailed' 返回每个成员的发言统计")
+                            })
+                        })
+                        put("required", requiredArray())
+                    }
+                )
             )
         )
     }
@@ -738,6 +765,10 @@ class DirectModelAgent(
                 "search_context" -> {
                     val query = args["query"]?.jsonPrimitive?.content ?: ""
                     searchContext(query)
+                }
+                
+                "get_group_stats" -> {
+                    getGroupStats()
                 }
                 
                 else -> "未知工具: $toolName"
@@ -1164,6 +1195,67 @@ class DirectModelAgent(
         
         return expanded
     }
+    
+    /**
+     * 获取群组聊天统计信息
+     */
+    private fun getGroupStats(): String {
+        return try {
+            if (groupChatHistory.isEmpty()) {
+                return "📊 当前群组暂无聊天记录。"
+            }
+            
+            // 过滤掉 AI 自己的消息
+            val userMessages = groupChatHistory.filter { it.senderId != "silk_ai_agent" }
+            
+            if (userMessages.isEmpty()) {
+                return "📊 当前群组暂无用户消息。"
+            }
+            
+            // 统计每个成员的发言数
+            val memberStats = userMessages
+                .groupBy { it.senderName to it.senderId }
+                .map { (key, messages) ->
+                    val (name, id) = key
+                    MemberStat(
+                        name = name ?: "未知用户",
+                        id = id,
+                        messageCount = messages.size
+                    )
+                }
+                .sortedByDescending { it.messageCount }
+            
+            val totalMessages = userMessages.size
+            val totalMembers = memberStats.size
+            
+            val sb = StringBuilder()
+            sb.append("📊 **群聊统计信息**\n\n")
+            sb.append("👥 总成员数：$totalMembers 人\n")
+            sb.append("💬 总消息数：$totalMessages 条\n")
+            sb.append("\n")
+            sb.append("---\n")
+            sb.append("**成员发言统计：**\n\n")
+            
+            memberStats.forEachIndexed { index, stat ->
+                val percentage = (stat.messageCount * 100.0 / totalMessages).toInt()
+                val bar = "█".repeat((percentage / 5).coerceAtMost(20))  // 进度条，最多20格
+                sb.append("${index + 1}. **${stat.name}**\n")
+                sb.append("   📝 发言：${stat.messageCount} 条 ($percentage%)\n")
+                sb.append("   $bar\n\n")
+            }
+            
+            sb.toString()
+        } catch (e: Exception) {
+            logger.error("❌ 获取群组统计失败: ${e.message}", e)
+            "获取群组统计失败: ${e.message}"
+        }
+    }
+    
+    private data class MemberStat(
+        val name: String,
+        val id: String,
+        val messageCount: Int
+    )
     
     /**
      * 清空对话历史
