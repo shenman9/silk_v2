@@ -205,9 +205,11 @@ object GroupRepository {
     // ==================== 联系人对话相关 ====================
     
     /**
-     * 查找两个用户的私聊群组
-     * ✅ 只返回【仅包含这两个用户】的群组（2人私聊）
-     * 排除多人群组
+     * 查找两个用户共同的对话群组
+     *
+     * 设计目标：
+     * 1. 支持“2人私聊升级为多人群聊”后仍复用原 groupId
+     * 2. 避免因为成员数变化（>2）导致创建新群、历史看起来“消失”
      */
     fun findCommonGroup(user1Id: String, user2Id: String): Group? {
         return transaction {
@@ -226,26 +228,39 @@ object GroupRepository {
             // 找到两个用户共同的群组
             val commonGroupIds = user1Groups.intersect(user2Groups)
             
-            // ✅ 遍历共同群组，只返回恰好有2个成员的群组（私聊）
-            for (groupId in commonGroupIds) {
+            if (commonGroupIds.isEmpty()) {
+                println("ℹ️ 未找到 $user1Id 和 $user2Id 的共同群组")
+                return@transaction null
+            }
+            
+            // 候选群组：同时包含两个用户（成员数>=2）
+            // 排序策略：
+            // - 先按成员数升序（优先更接近“私聊”的会话）
+            // - 再按创建时间升序（优先复用更早建立的对话，保证稳定性）
+            val candidates = commonGroupIds.mapNotNull { groupId ->
                 val memberCount = GroupMembers
                     .select { GroupMembers.groupId eq groupId }
                     .count()
-                
-                // 只有恰好2人的群组才是私聊
-                if (memberCount == 2L) {
-                    val group = findGroupById(groupId)
-                    if (group != null) {
-                        println("✅ 找到私聊群组: ${group.name} (${group.id}), 成员数: $memberCount")
-                        return@transaction group
-                    }
-                } else {
-                    println("⏭️ 跳过多人群组: $groupId, 成员数: $memberCount")
-                }
+                val group = findGroupById(groupId)
+                if (group != null) Triple(group, memberCount, group.createdAt) else null
             }
             
-            println("ℹ️ 未找到 $user1Id 和 $user2Id 的私聊群组")
-            null
+            val selected = candidates
+                .sortedWith(
+                    compareBy<Triple<Group, Long, String>> { it.second }
+                        .thenBy { it.third }
+                )
+                .firstOrNull()
+                ?.first
+            
+            if (selected != null) {
+                val selectedMemberCount = candidates.first { it.first.id == selected.id }.second
+                println("✅ 找到共同会话群组: ${selected.name} (${selected.id}), 成员数: $selectedMemberCount")
+            } else {
+                println("ℹ️ 未找到 $user1Id 和 $user2Id 的有效共同群组")
+            }
+            
+            selected
         }
     }
     
