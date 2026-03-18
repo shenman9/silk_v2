@@ -575,14 +575,19 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
     var isLoadingGroups by remember { mutableStateOf(false) }
     var forwardResult by remember { mutableStateOf<String?>(null) }
     
-    // 从消息历史中提取用户列表（去重）
-    val sessionUsers = remember(messages) {
+    // 从群组成员列表和消息历史中提取用户列表（去重）
+    // 优先使用 groupMembers（包含所有成员），然后补充消息历史中的成员
+    val sessionUsers = remember(groupMembers, messages) {
         val users = mutableSetOf<Pair<String, String>>() // (id, name)
         // 始终添加 Silk AI
         users.add("silk_ai_agent" to "🤖 Silk")
-        // 添加当前用户
+        // 添加群组成员列表中的所有成员
+        groupMembers.forEach { member ->
+            users.add(member.id to member.fullName)
+        }
+        // 添加当前用户（以防万一）
         users.add(user.id to user.fullName)
-        // 从消息中提取其他用户
+        // 从消息中提取其他用户（补充可能不在成员列表中的用户，如已退群的用户）
         messages.forEach { msg ->
             if (msg.userId != "silk_ai_agent" && msg.userId != user.id) {
                 users.add(msg.userId to msg.userName)

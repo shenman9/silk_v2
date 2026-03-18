@@ -235,11 +235,21 @@ fun ChatScreen(appState: AppState) {
     var mentionSearchText by remember { mutableStateOf("") }
     var mentionStartIndex by remember { mutableStateOf(-1) }
     
-    // 从消息历史中提取用户列表（去重），用于 @ 提及下拉
-    val sessionUsers = remember(messages) {
+    // 从消息历史和群组成员列表中提取用户列表（去重），用于 @ 提及下拉
+    // 优先使用 groupMembers（包含所有群组成员），同时合并消息历史中的用户
+    val sessionUsers = remember(messages, groupMembers) {
         val users = mutableSetOf<Pair<String, String>>() // (id, name)
+        // 始终添加 Silk AI
         users.add("silk_ai_agent" to "🤖 Silk")
+        // 添加当前用户
         users.add(user.id to user.fullName)
+        // 从群组成员列表添加所有成员
+        groupMembers.forEach { member ->
+            if (member.id != "silk_ai_agent" && member.id != user.id) {
+                users.add(member.id to member.fullName)
+            }
+        }
+        // 从消息中提取其他用户（作为补充，以防成员列表不完整）
         messages.forEach { msg ->
             if (msg.userId != "silk_ai_agent" && msg.userId != user.id) {
                 users.add(msg.userId to msg.userName)

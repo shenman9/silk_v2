@@ -48,12 +48,22 @@ class DirectModelAgent(
     
     // 群聊历史记录（用于统计成员发言等）
     private var groupChatHistory: List<com.silk.backend.models.ChatHistoryEntry> = emptyList()
+    // 群组成员列表（用于统计所有成员）
+    private var groupMembersList: List<Pair<String, String>> = emptyList() // (id, name)
+
     
     /**
      * 设置群聊历史记录（用于统计成员发言等）
      */
     fun setGroupChatHistory(history: List<com.silk.backend.models.ChatHistoryEntry>) {
         groupChatHistory = history
+    }
+    
+    /**
+     * 设置群组成员列表（用于统计所有成员，包括未发言的）
+     */
+    fun setGroupMembersList(members: List<Pair<String, String>>) {
+        groupMembersList = members
     }
     
     /**
@@ -1198,22 +1208,15 @@ class DirectModelAgent(
     
     /**
      * 获取群组聊天统计信息
+     * 包含所有群组成员（从数据库获取），以及每个成员的发言统计
      */
     private fun getGroupStats(): String {
         return try {
-            if (groupChatHistory.isEmpty()) {
-                return "📊 当前群组暂无聊天记录。"
-            }
-            
             // 过滤掉 AI 自己的消息
             val userMessages = groupChatHistory.filter { it.senderId != "silk_ai_agent" }
             
-            if (userMessages.isEmpty()) {
-                return "📊 当前群组暂无用户消息。"
-            }
-            
-            // 统计每个成员的发言数
-            val memberStats = userMessages
+            // 统计发言的成员
+            val speakingStats = userMessages
                 .groupBy { it.senderName to it.senderId }
                 .map { (key, messages) ->
                     val (name, id) = key
@@ -1223,22 +1226,50 @@ class DirectModelAgent(
                         messageCount = messages.size
                     )
                 }
-                .sortedByDescending { it.messageCount }
+                .associateBy { it.id }
+            
+            // 构建完整成员列表（合并发言统计）
+            val allMemberStats = if (groupMembersList.isNotEmpty()) {
+                // 使用数据库中的完整成员列表
+                groupMembersList.map { (id, name) ->
+                    val stat = speakingStats[id]
+                    MemberStat(
+                        name = name,
+                        id = id,
+                        messageCount = stat?.messageCount ?: 0
+                    )
+                }.sortedByDescending { it.messageCount }
+            } else {
+                // 如果没有成员列表，使用发言统计
+                speakingStats.values.toList().sortedByDescending { it.messageCount }
+            }
             
             val totalMessages = userMessages.size
-            val totalMembers = memberStats.size
+            val totalMembers = allMemberStats.size
+            val speakingMembers = allMemberStats.count { it.messageCount > 0 }
+            val silentMembers = totalMembers - speakingMembers
+            
+            if (totalMembers == 0) {
+                return "📊 当前群组暂无成员。"
+            }
             
             val sb = StringBuilder()
             sb.append("📊 **群聊统计信息**\n\n")
             sb.append("👥 总成员数：$totalMembers 人\n")
             sb.append("💬 总消息数：$totalMessages 条\n")
+            sb.append("🗣️ 发言成员：$speakingMembers 人\n")
+            sb.append("🔇 沉默成员：$silentMembers 人\n")
             sb.append("\n")
             sb.append("---\n")
             sb.append("**成员发言统计：**\n\n")
             
-            memberStats.forEachIndexed { index, stat ->
-                val percentage = (stat.messageCount * 100.0 / totalMessages).toInt()
-                val bar = "█".repeat((percentage / 5).coerceAtMost(20))  // 进度条，最多20格
+            allMemberStats.forEachIndexed { index, stat ->
+                val percentage = if (totalMessages > 0) (stat.messageCount * 100.0 / totalMessages).toInt() else 0
+                val bar = if (stat.messageCount > 0) {
+                    "█".repeat((percentage / 5).coerceAtMost(20))  // 进度条，最多20格
+                } else {
+                    "○ (未发言)"
+                }
                 sb.append("${index + 1}. **${stat.name}**\n")
                 sb.append("   📝 发言：${stat.messageCount} 条 ($percentage%)\n")
                 sb.append("   $bar\n\n")
@@ -1250,7 +1281,7 @@ class DirectModelAgent(
             "获取群组统计失败: ${e.message}"
         }
     }
-    
+
     private data class MemberStat(
         val name: String,
         val id: String,

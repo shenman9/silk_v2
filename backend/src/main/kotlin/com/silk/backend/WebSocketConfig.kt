@@ -14,6 +14,7 @@ import kotlinx.serialization.json.*
 import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
 import com.silk.backend.database.UnreadRepository
+import com.silk.backend.database.GroupRepository
 
 @Serializable
 data class Message(
@@ -511,6 +512,14 @@ class ChatServer(
         // 加载聊天历史并设置到 Agent（用于群组统计等功能）
         val chatHistory = historyManager.loadChatHistory(sessionName)
         directModelAgent.setGroupChatHistory(chatHistory?.messages ?: emptyList())
+        
+        // 获取群组成员列表并设置到 Agent（用于统计所有成员）
+        if (sessionName.startsWith("group_")) {
+            val groupId = sessionName.removePrefix("group_")
+            val members = GroupRepository.getGroupMembers(groupId)
+            val memberList = members.map { it.userId to it.userName }
+            directModelAgent.setGroupMembersList(memberList)
+        }
         
         // 使用 DirectModelAgent 直接调用模型
         var fullResponse = ""
