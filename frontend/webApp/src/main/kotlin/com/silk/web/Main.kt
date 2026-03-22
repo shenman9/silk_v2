@@ -984,7 +984,21 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         message = message.copy(category = com.silk.shared.models.MessageCategory.NORMAL),
                         isTransient = true,
                         currentUserId = user.id,
-                        groupId = group.id
+                        groupId = group.id,
+                        onCopy = { content ->
+                            copyTextToClipboard(content)
+                            console.log("✅ 消息已复制到剪贴板")
+                        },
+                        onForward = { msg ->
+                            messageToForward = msg
+                            scope.launch {
+                                isLoadingGroups = true
+                                val response = ApiClient.getUserGroups(user.id)
+                                userGroups = response.groups?.filter { it.id != group.id } ?: emptyList()
+                                isLoadingGroups = false
+                                showForwardDialog = true
+                            }
+                        }
                     )
                 } else {
                     // 处理中阶段（含工具调用与步骤）按临时状态样式显示

@@ -207,6 +207,8 @@ fun ChatScreen(appState: AppState) {
     var userGroups by remember { mutableStateOf<List<Group>>(emptyList()) }
     var isLoadingGroups by remember { mutableStateOf(false) }
     var forwardResult by remember { mutableStateOf<String?>(null) }
+    // ✅ 单条消息转发状态（用于 AI 消息等直接点击转发按钮的情况）
+    var messageToForward by remember { mutableStateOf<Message?>(null) }
     
     // 添加联系人对话框状态
     var showAddContactConfirm by remember { mutableStateOf<Message?>(null) }
@@ -1012,6 +1014,26 @@ fun ChatScreen(appState: AppState) {
                             onAIExpandChange = { messageId, isExpanded ->
                                 // 只切换展开状态，不做任何列表滚动，避免视图跳动
                                 aiMessageExpandedStates[messageId] = isExpanded
+                            },
+                            // 复制功能
+                            onCopy = { content ->
+                                val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) 
+                                    as android.content.ClipboardManager
+                                val clip = android.content.ClipData.newPlainText("消息", content)
+                                clipboard.setPrimaryClip(clip)
+                                android.widget.Toast.makeText(context, "已复制到剪贴板", android.widget.Toast.LENGTH_SHORT).show()
+                            },
+                            // 转发功能 - 单条消息转发
+                            onForward = { msg ->
+                                // 设置要转发的单条消息
+                                messageToForward = msg
+                                scope.launch {
+                                    isLoadingGroups = true
+                                    val response = ApiClient.getUserGroups(user.id)
+                                    userGroups = response.groups?.filter { it.id != group.id } ?: emptyList()
+                                    isLoadingGroups = false
+                                    showForwardToGroupDialog = true
+                                }
                             }
                         )
                     }
@@ -1547,17 +1569,22 @@ fun ChatScreen(appState: AppState) {
     
     // ==================== 转发到群组对话框 ====================
     if (showForwardToGroupDialog) {
+        // 支持单条消息转发（AI消息）和多条消息转发（选择模式）
+        val messagesToForward = if (messageToForward != null) {
+            listOf(messageToForward!!)
+        } else {
+            messages.filter { selectedMessages.contains(it.id) }.sortedBy { it.timestamp }
+        }
+        
         ForwardToGroupDialog(
             groups = userGroups,
             isLoading = isLoadingGroups,
-            selectedMessages = messages.filter { selectedMessages.contains(it.id) }.sortedBy { it.timestamp },
+            selectedMessages = messagesToForward,
             currentUser = user,
             onForward = { targetGroup ->
                 scope.launch {
                     forwardResult = null
-                    val selectedContent = messages
-                        .filter { selectedMessages.contains(it.id) }
-                        .sortedBy { it.timestamp }
+                    val selectedContent = messagesToForward
                         .joinToString("\n\n") { msg ->
                             val time = SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).apply {
                                 timeZone = java.util.TimeZone.getTimeZone("Asia/Shanghai")
@@ -1578,13 +1605,14 @@ fun ChatScreen(appState: AppState) {
                         forwardResult = "✅ 已转发到 ${targetGroup.name}"
                         android.widget.Toast.makeText(
                             context,
-                            "已转发 ${selectedMessages.size} 条消息到 ${targetGroup.name}",
+                            "已转发 ${messagesToForward.size} 条消息到 ${targetGroup.name}",
                             android.widget.Toast.LENGTH_SHORT
                         ).show()
                         kotlinx.coroutines.delay(1000)
                         showForwardToGroupDialog = false
                         isSelectionMode = false
                         selectedMessages.clear()
+                        messageToForward = null  // 清除单条消息转发状态
                         forwardResult = null
                     } else {
                         forwardResult = "❌ 转发失败"
@@ -1593,6 +1621,7 @@ fun ChatScreen(appState: AppState) {
             },
             onDismiss = {
                 showForwardToGroupDialog = false
+                messageToForward = null  // 清除单条消息转发状态
                 forwardResult = null
             },
             result = forwardResult
@@ -2145,7 +2174,10 @@ fun MessageItem(
     onRecall: (String) -> Unit = {},
     // AI 消息展开状态相关参数
     isAIExpanded: Boolean = true,
-    onAIExpandChange: (String, Boolean) -> Unit = { _, _ -> }
+    onAIExpandChange: (String, Boolean) -> Unit = { _, _ -> },
+    // 复制和转发功能相关参数
+    onCopy: (String) -> Unit = {},
+    onForward: (Message) -> Unit = {}
 ) {
     val isCurrentUser = message.userId == currentUserId
     val isSystemMessage = message.type == MessageType.SYSTEM
@@ -2177,7 +2209,9 @@ fun MessageItem(
             timeString = timeString,
             isTransient = isTransient,
             isExpanded = isAIExpanded,
-            onExpandChange = { newExpanded -> onAIExpandChange(message.id, newExpanded) }
+            onExpandChange = { newExpanded -> onAIExpandChange(message.id, newExpanded) },
+            onCopy = onCopy,
+            onForward = onForward
         )
         return
     }
