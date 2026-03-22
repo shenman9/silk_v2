@@ -102,4 +102,11 @@ dependencies {
     
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core-js:1.7.3")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.0")
+
+    implementation(npm("markdown-it", "^14.1.0"))
+    implementation(npm("markdown-it-task-lists", "^2.1.1"))
+    implementation(npm("dompurify", "^3.2.6"))
+    implementation(npm("katex", "^0.16.22"))
+    implementation(npm("highlight.js", "^11.11.1"))
+    implementation(npm("github-markdown-css", "^5.8.1"))
 }

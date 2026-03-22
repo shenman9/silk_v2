@@ -9,6 +9,9 @@ backend/static/*.js.map
 backend/static/*.js.LICENSE.txt
 backend/static/*.html
 backend/static/index.html
+backend/static/*.woff
+backend/static/*.woff2
+backend/static/*.ttf
 
 # IDEA
 .idea/
