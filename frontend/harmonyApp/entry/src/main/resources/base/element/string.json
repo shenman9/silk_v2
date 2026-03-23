@@ -1,6 +1,14 @@
 {
   "string": [
     {
+      "name": "module_desc",
+      "value": "entry module description"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "entry ability description"
+    },
+    {
       "name": "EntryAbility_label",
       "value": "Silk"
     },
@@ -99,6 +107,74 @@
     {
       "name": "silk_description",
       "value": "Intelligent Collaboration Platform"
+    },
+    {
+      "name": "create_group",
+      "value": "Create Group"
+    },
+    {
+      "name": "go_login",
+      "value": "Go to Login"
+    },
+    {
+      "name": "go_register",
+      "value": "Go to Register"
+    },
+    {
+      "name": "group_list_title",
+      "value": "Groups"
+    },
+    {
+      "name": "has_account",
+      "value": "Already have an account?"
+    },
+    {
+      "name": "input_placeholder",
+      "value": "Enter text..."
+    },
+    {
+      "name": "loading",
+      "value": "Loading..."
+    },
+    {
+      "name": "login_button",
+      "value": "Login"
+    },
+    {
+      "name": "login_title",
+      "value": "Login"
+    },
+    {
+      "name": "no_account",
+      "value": "Don't have an account?"
+    },
+    {
+      "name": "no_messages",
+      "value": "No messages"
+    },
+    {
+      "name": "register_button",
+      "value": "Register"
+    },
+    {
+      "name": "register_title",
+      "value": "Register"
+    },
+    {
+      "name": "search_placeholder",
+      "value": "Search..."
+    },
+    {
+      "name": "search_results",
+      "value": "Search Results"
+    },
+    {
+      "name": "send_message",
+      "value": "Send"
+    },
+    {
+      "name": "settings_title",
+      "value": "Settings"
     }
   ]
 }

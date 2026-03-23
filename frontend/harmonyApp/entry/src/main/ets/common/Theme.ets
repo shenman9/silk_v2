@@ -1,3 +1,47 @@
+export interface ThemeColors {
+  primary: string;
+  primaryDark: string;
+  primaryLight: string;
+  secondary: string;
+  background: string;
+  surface: string;
+  surfaceVariant: string;
+  cardBackground: string;
+  textPrimary: string;
+  textSecondary: string;
+  textLight: string;
+  success: string;
+  warning: string;
+  error: string;
+  info: string;
+  border: string;
+  onPrimary: string;
+}
+
+export interface ThemeNamespace {
+  colors: ThemeColors;
+}
+
+const SILK_THEME_COLORS: ThemeColors = {
+  primary: '#C9A86C',
+  primaryDark: '#A8894D',
+  primaryLight: '#E0CDA0',
+  secondary: '#E8D5B5',
+  background: '#FDF8F0',
+  surface: '#FFFBF5',
+  surfaceVariant: '#FFFFFF',
+  cardBackground: '#FFFFFF',
+  textPrimary: '#4A4038',
+  textSecondary: '#8A7B6A',
+  textLight: '#B8A890',
+  success: '#7DAE6C',
+  warning: '#E8B86C',
+  error: '#D97B7B',
+  info: '#7BA8C9',
+  border: '#E8E0D4',
+  onPrimary: '#FFFFFF'
+};
+
 /**
  * Silk 主题配置
  * 温暖的香槟金色调，优雅的丝绸质感
@@ -61,6 +105,9 @@ export class SilkTheme {
   static readonly FontSizeXL: number = 18;
   static readonly FontSizeXXL: number = 24;
   static readonly FontSizeDisplay: number = 32;
+
+  // 兼容旧代码的颜色对象访问方式
+  static readonly colors: ThemeColors = SILK_THEME_COLORS;
 }
 
 /**
@@ -79,3 +126,9 @@ export function getBubbleBackground(isSelf: boolean, isAI: boolean, isSystem: bo
 export function getBubbleTextColor(isSelf: boolean): string {
   return isSelf ? '#FFFFFF' : SilkTheme.TextPrimary;
 }
+
+// 兼容现有页面/组件导入
+export const Theme: ThemeNamespace = {
+  colors: SILK_THEME_COLORS
+};
+export const SilkColors: ThemeColors = SILK_THEME_COLORS;

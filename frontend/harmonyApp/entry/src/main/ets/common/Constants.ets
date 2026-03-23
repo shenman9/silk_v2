@@ -2,15 +2,17 @@
  * 应用常量配置
  * 配置后端 API 地址和其他常量
  */
+import { BACKEND_HOST, BACKEND_HTTP_PORT } from './EnvConfig';
 
 export class Constants {
   // 后端 API 基础地址 (开发环境)
-  // 鸿蒙真机需要使用电脑的局域网 IP
-  static readonly DEFAULT_BACKEND_HOST: string = '192.168.1.100'; // 请根据实际环境修改
-  static readonly DEFAULT_BACKEND_PORT: string = '8006';
+  static readonly DEFAULT_BACKEND_HOST: string = BACKEND_HOST;
+  static readonly DEFAULT_BACKEND_PORT: string = BACKEND_HTTP_PORT;
   
   // WebSocket 基础地址
   static readonly WS_PROTOCOL: string = 'ws';
+  static readonly API_BASE_URL: string = `http://${Constants.DEFAULT_BACKEND_HOST}:${Constants.DEFAULT_BACKEND_PORT}`;
+  static readonly WS_BASE_URL: string = `${Constants.WS_PROTOCOL}://${Constants.DEFAULT_BACKEND_HOST}:${Constants.DEFAULT_BACKEND_PORT}`;
   
   // API 超时时间 (毫秒)
   static readonly API_TIMEOUT: number = 30000;
@@ -41,6 +43,10 @@ export class Constants {
   static readonly MESSAGE_CATEGORY_FINAL_REPORT: string = 'FINAL_REPORT';
   static readonly MESSAGE_CATEGORY_AGENT_STATUS: string = 'AGENT_STATUS';
 }
+
+export const API_BASE_URL: string = Constants.API_BASE_URL;
+export const WS_BASE_URL: string = Constants.WS_BASE_URL;
+export const API_TIMEOUT: number = Constants.API_TIMEOUT;
 
 /**
  * API 端点路径

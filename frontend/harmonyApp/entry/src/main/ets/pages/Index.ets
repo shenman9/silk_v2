@@ -1,9 +1,8 @@
 /**
  * 主页面 - 路由入口
- * 根据登录状态显示不同页面
+ * 单入口 + 自定义路由状态切换
  */
-import { AppStore } from '../stores/AppStore';
-import { Router, PageName } from '../common/Router';
+import { router as appRouter, PageName } from '../common/Router';
 import { LoginPage } from './LoginPage';
 import { GroupListPage } from './GroupListPage';
 import { ChatPage } from './ChatPage';
@@ -12,25 +11,13 @@ import { SettingsPage } from './SettingsPage';
 @Entry
 @Component
 struct Index {
-  @StorageLink('appStore') appStore: AppStore = AppStore.getInstance();
   @State currentPage: PageName = PageName.Login;
 
-  aboutToAppear() {
-    // 初始化检查登录状态
-    this.checkLoginStatus();
-    
-    // 订阅路由变化
-    Router.getInstance().onPageChange((page: PageName) => {
+  aboutToAppear(): void {
+    this.currentPage = appRouter.getCurrentPage();
+    appRouter.onPageChange((page: PageName): void => {
       this.currentPage = page;
     });
-  }
-
-  checkLoginStatus() {
-    if (this.appStore.isLoggedIn) {
-      this.currentPage = PageName.GroupList;
-    } else {
-      this.currentPage = PageName.Login;
-    }
   }
 
   build() {
@@ -41,11 +28,13 @@ struct Index {
         GroupListPage();
       } else if (this.currentPage === PageName.Chat) {
         ChatPage();
-      } else if (this.currentPage === PageName.Settings) {
+      } else {
         SettingsPage();
       }
     }
     .width('100%')
-    .height('100%');
+    .height('100%')
+    .justifyContent(FlexAlign.Start)
+    .alignItems(HorizontalAlign.Start);
   }
 }

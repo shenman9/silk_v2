@@ -66,10 +66,22 @@ export function createMessage(
  */
 export function parseMessage(json: string): Message {
   const obj = JSON.parse(json) as Message;
+  const parsedType: MessageType = obj.type ? obj.type as MessageType : MessageType.TEXT;
+  const parsedCategory: MessageCategory = obj.category ? obj.category as MessageCategory : MessageCategory.NORMAL;
+  const parsedIsTransient: boolean = obj.isTransient ? obj.isTransient : false;
+  const parsedIsIncremental: boolean = obj.isIncremental ? obj.isIncremental : false;
   return {
-    ...obj,
-    type: obj.type as MessageType || MessageType.TEXT,
-    category: obj.category as MessageCategory || MessageCategory.NORMAL
+    id: obj.id,
+    userId: obj.userId,
+    userName: obj.userName,
+    content: obj.content,
+    timestamp: obj.timestamp,
+    type: parsedType,
+    isTransient: parsedIsTransient,
+    currentStep: obj.currentStep,
+    totalSteps: obj.totalSteps,
+    isIncremental: parsedIsIncremental,
+    category: parsedCategory
   };
 }
 

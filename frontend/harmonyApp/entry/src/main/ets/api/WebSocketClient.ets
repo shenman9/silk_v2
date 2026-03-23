@@ -213,6 +213,7 @@ export class WebSocketClient {
       timestamp: Date.now(),
       type: MessageType.TEXT,
       isTransient: false,
+      isIncremental: false,
       category: MessageCategory.NORMAL
     };
     

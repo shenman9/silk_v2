@@ -1,9 +1,9 @@
 {
   "name": "entry",
   "version": "1.0.0",
-  "description": "Silk HarmonyOS Entry Module",
+  "description": "entry module",
   "main": "",
   "author": "",
-  "license": "MIT",
+  "license": "ISC",
   "dependencies": {}
 }

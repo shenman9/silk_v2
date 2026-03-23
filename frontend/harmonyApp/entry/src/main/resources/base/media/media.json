@@ -1,0 +1,12 @@
+{
+  "images": [
+    {
+      "name": "startIcon",
+      "value": "startIcon.png"
+    },
+    {
+      "name": "app_icon",
+      "value": "app_icon.png"
+    }
+  ]
+}

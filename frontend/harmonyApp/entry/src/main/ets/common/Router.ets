@@ -3,8 +3,6 @@
  * 用于页面导航
  */
 
-import { AppStore } from '../stores/AppStore';
-
 export enum PageRoute {
   LOGIN = 'pages/LoginPage',
   GROUP_LIST = 'pages/GroupListPage',
@@ -12,9 +10,17 @@ export enum PageRoute {
   SETTINGS = 'pages/SettingsPage'
 }
 
+export enum PageName {
+  Login = 'Login',
+  GroupList = 'GroupList',
+  Chat = 'Chat',
+  Settings = 'Settings'
+}
+
 export class Router {
   private static instance: Router;
-  private appStore: AppStore | null = null;
+  private currentPage: PageName = PageName.Login;
+  private pageListeners: Array<(page: PageName) => void> = [];
   
   private constructor() {}
   
@@ -25,26 +31,31 @@ export class Router {
     return Router.instance;
   }
   
-  setAppStore(store: AppStore) {
-    this.appStore = store;
+  onPageChange(listener: (page: PageName) => void): void {
+    this.pageListeners.push(listener);
+  }
+
+  getCurrentPage(): PageName {
+    return this.currentPage;
+  }
+
+  private notifyPageChange(page: PageName): void {
+    this.currentPage = page;
+    this.pageListeners.forEach((listener: (next: PageName) => void) => listener(page));
   }
   
   /**
    * 导航到登录页面
    */
   goToLogin(): void {
-    // 清除用户状态
-    if (this.appStore) {
-      this.appStore.logout();
-    }
-    // 页面路由由 UI 层处理
+    this.notifyPageChange(PageName.Login);
   }
   
   /**
    * 导航到群组列表
    */
   goToGroupList(): void {
-    // 页面路由由 UI 层处理
+    this.notifyPageChange(PageName.GroupList);
   }
   
   /**
@@ -52,25 +63,22 @@ export class Router {
    * @param groupId 群组ID
    * @param groupName 群组名称
    */
-  goToChat(groupId: string, groupName: string): void {
-    if (this.appStore) {
-      this.appStore.setCurrentGroup(groupId, groupName);
-    }
-    // 页面路由由 UI 层处理
+  goToChat(_groupId: string, _groupName: string): void {
+    this.notifyPageChange(PageName.Chat);
   }
   
   /**
    * 导航到设置页面
    */
   goToSettings(): void {
-    // 页面路由由 UI 层处理
+    this.notifyPageChange(PageName.Settings);
   }
   
   /**
    * 返回上一页
    */
   goBack(): void {
-    // 页面路由由 UI 层处理
+    this.notifyPageChange(PageName.GroupList);
   }
 }
 

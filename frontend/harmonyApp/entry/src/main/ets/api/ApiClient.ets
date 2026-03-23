@@ -65,6 +65,72 @@ export interface SearchResult {
   highlight?: string;
 }
 
+interface LoginPayload {
+  loginName: string;
+  password: string;
+}
+
+interface LoginData {
+  success: boolean;
+  message: string;
+  user?: User;
+  token?: string;
+}
+
+interface BackendUser {
+  id: string;
+  loginName?: string;
+  fullName?: string;
+  phoneNumber?: string;
+  createdAt?: string;
+}
+
+interface BackendGroup {
+  id: string;
+  name: string;
+  hostId?: string;
+  createdAt?: string;
+  invitationCode?: string;
+  hostName?: string;
+}
+
+interface BackendCreateGroupRequest {
+  userId: string;
+  groupName: string;
+}
+
+interface BackendJoinGroupRequest {
+  userId: string;
+  invitationCode: string;
+}
+
+interface BackendLeaveGroupRequest {
+  userId: string;
+}
+
+interface UpdateSettingsRequestBody {
+  userId: string;
+  language: string;
+  defaultAgentInstruction: string;
+}
+
+interface LatestVersionInfo {
+  versionName: string;
+  versionCode: number;
+  downloadUrl: string;
+}
+
+interface ResponseEnvelope {
+  success: boolean;
+  message: string;
+  data?: Object;
+  user?: BackendUser;
+  token?: string;
+  group?: BackendGroup;
+  groups?: BackendGroup[];
+  settings?: UserSettings;
+}
+
 /**
  * Silk API 客户端
  */
@@ -89,7 +155,7 @@ export class ApiClient {
   /**
    * 发送 GET 请求
    */
-  async get<T>(endpoint: string, headers?: Record<string, string>): Promise<ApiResponse<T>> {
+  async get<T>(endpoint: string): Promise<ApiResponse<T>> {
     const httpRequest = this.createHttpRequest();
     try {
       const response = await httpRequest.request(
@@ -97,8 +163,7 @@ export class ApiClient {
         {
           method: http.RequestMethod.GET,
           header: {
-            'Content-Type': 'application/json',
-            ...headers
+            'Content-Type': 'application/json'
           },
           connectTimeout: this.timeout,
           readTimeout: this.timeout
@@ -106,19 +171,13 @@ export class ApiClient {
       );
 
       if (response.responseCode === 200) {
-        const result = JSON.parse(response.result as string);
-        return result as ApiResponse<T>;
+        const resultText: string = response.result as string;
+        return this.parseResponse<T>(resultText);
       } else {
-        return {
-          success: false,
-          message: `HTTP Error: ${response.responseCode}`
-        };
+        return this.failedResponse<T>(`HTTP Error: ${response.responseCode}`);
       }
     } catch (error) {
-      return {
-        success: false,
-        message: `Request failed: ${error.message}`
-      };
+      return this.failedResponse<T>(`Request failed: ${this.stringifyError(error)}`);
     } finally {
       httpRequest.destroy();
     }
@@ -127,7 +186,7 @@ export class ApiClient {
   /**
    * 发送 POST 请求
    */
-  async post<T>(endpoint: string, body: object, headers?: Record<string, string>): Promise<ApiResponse<T>> {
+  async post<T>(endpoint: string, body: Object): Promise<ApiResponse<T>> {
     const httpRequest = this.createHttpRequest();
     try {
       const response = await httpRequest.request(
@@ -135,8 +194,7 @@ export class ApiClient {
         {
           method: http.RequestMethod.POST,
           header: {
-            'Content-Type': 'application/json',
-            ...headers
+            'Content-Type': 'application/json'
           },
           extraData: body,
           connectTimeout: this.timeout,
@@ -145,22 +203,142 @@ export class ApiClient {
       );
 
       if (response.responseCode === 200 || response.responseCode === 201) {
-        const result = JSON.parse(response.result as string);
-        return result as ApiResponse<T>;
+        const resultText: string = response.result as string;
+        return this.parseResponse<T>(resultText);
       } else {
-        return {
-          success: false,
-          message: `HTTP Error: ${response.responseCode}`
-        };
+        return this.failedResponse<T>(`HTTP Error: ${response.responseCode}`);
       }
     } catch (error) {
-      return {
-        success: false,
-        message: `Request failed: ${error.message}`
-      };
+      return this.failedResponse<T>(`Request failed: ${this.stringifyError(error)}`);
     } finally {
       httpRequest.destroy();
     }
+  }
+
+  async put<T>(endpoint: string, body: Object): Promise<ApiResponse<T>> {
+    const httpRequest = this.createHttpRequest();
+    try {
+      const response = await httpRequest.request(
+        `${this.baseUrl}${endpoint}`,
+        {
+          method: http.RequestMethod.PUT,
+          header: {
+            'Content-Type': 'application/json'
+          },
+          extraData: body,
+          connectTimeout: this.timeout,
+          readTimeout: this.timeout
+        }
+      );
+
+      if (response.responseCode === 200 || response.responseCode === 201) {
+        const resultText: string = response.result as string;
+        return this.parseResponse<T>(resultText);
+      } else {
+        return this.failedResponse<T>(`HTTP Error: ${response.responseCode}`);
+      }
+    } catch (error) {
+      return this.failedResponse<T>(`Request failed: ${this.stringifyError(error)}`);
+    } finally {
+      httpRequest.destroy();
+    }
+  }
+
+  private failedResponse<T>(message: string): ApiResponse<T> {
+    return {
+      success: false,
+      message: message
+    };
+  }
+
+  private parseResponse<T>(resultText: string): ApiResponse<T> {
+    const parsedObj: ResponseEnvelope = JSON.parse(resultText) as ResponseEnvelope;
+
+    if (parsedObj.data !== undefined) {
+      return parsedObj as ApiResponse<T>;
+    }
+
+    if (parsedObj.user !== undefined || parsedObj.token !== undefined) {
+      const normalizedUser: User | undefined = parsedObj.user ? this.normalizeUser(parsedObj.user) : undefined;
+      const loginData: LoginData = {
+        success: parsedObj.success,
+        message: parsedObj.message,
+        user: normalizedUser,
+        token: parsedObj.token
+      };
+      const normalizedLogin: ApiResponse<T> = {
+        success: parsedObj.success,
+        message: parsedObj.message,
+        data: loginData as T
+      };
+      return normalizedLogin;
+    }
+
+    if (parsedObj.groups !== undefined) {
+      const normalizedGroupsData: Group[] = parsedObj.groups.map((group: BackendGroup) => this.normalizeGroup(group));
+      const normalizedGroups: ApiResponse<T> = {
+        success: parsedObj.success,
+        message: parsedObj.message,
+        data: normalizedGroupsData as T
+      };
+      return normalizedGroups;
+    }
+
+    if (parsedObj.group !== undefined) {
+      const normalizedGroupData: Group = this.normalizeGroup(parsedObj.group);
+      const normalizedGroup: ApiResponse<T> = {
+        success: parsedObj.success,
+        message: parsedObj.message,
+        data: normalizedGroupData as T
+      };
+      return normalizedGroup;
+    }
+
+    if (parsedObj.settings !== undefined) {
+      const settingsResponse: UserSettingsResponse = {
+        success: parsedObj.success,
+        message: parsedObj.message,
+        settings: parsedObj.settings
+      };
+      const normalizedSettings: ApiResponse<T> = {
+        success: parsedObj.success,
+        message: parsedObj.message,
+        data: settingsResponse as T
+      };
+      return normalizedSettings;
+    }
+
+    return parsedObj as ApiResponse<T>;
+  }
+
+  private normalizeUser(user: BackendUser): User {
+    const displayName: string = user.fullName ? user.fullName : (user.loginName ? user.loginName : '用户');
+    const phone: string | undefined = user.phoneNumber ? user.phoneNumber : undefined;
+    return {
+      id: user.id,
+      name: displayName,
+      phone: phone
+    };
+  }
+
+  private normalizeGroup(group: BackendGroup): Group {
+    const now: number = Date.now();
+    return {
+      id: group.id,
+      name: group.name,
+      ownerId: group.hostId ? group.hostId : '',
+      memberCount: 0,
+      createdAt: now,
+      updatedAt: now
+    };
+  }
+
+  private stringifyError(error: Object): string {
+    const maybeError = error as Error;
+    if (maybeError && maybeError.message) {
+      return maybeError.message;
+    }
+    return 'unknown error';
   }
 
   // ==================== 认证相关 API ====================
@@ -169,24 +347,22 @@ export class ApiClient {
    * 用户登录
    */
   async login(loginName: string, password: string): Promise<ApiResponse<LoginResponse>> {
-    return this.post<LoginResponse>('/api/auth/login', {
-      loginName,
-      password
-    });
+    const payload: LoginPayload = { loginName: loginName, password: password };
+    return this.post<LoginResponse>('/auth/login', payload);
   }
 
   /**
    * 用户注册
    */
   async register(request: RegisterRequest): Promise<ApiResponse<RegisterResponse>> {
-    return this.post<RegisterResponse>('/api/auth/register', request);
+    return this.post<RegisterResponse>('/auth/register', request);
   }
 
   /**
    * 验证会话
    */
   async validateSession(userId: string): Promise<ApiResponse<User>> {
-    return this.get<User>(`/api/auth/validate?userId=${userId}`);
+    return this.get<User>(`/auth/validate/${userId}`);
   }
 
   // ==================== 群组相关 API ====================
@@ -195,14 +371,18 @@ export class ApiClient {
    * 获取用户的群组列表
    */
   async getGroups(userId: string): Promise<ApiResponse<Group[]>> {
-    return this.get<Group[]>(`/api/groups?userId=${userId}`);
+    return this.get<Group[]>(`/groups/user/${userId}`);
   }
 
   /**
    * 创建新群组
    */
   async createGroup(request: CreateGroupRequest): Promise<ApiResponse<Group>> {
-    return this.post<Group>('/api/groups/create', request);
+    const payload: BackendCreateGroupRequest = {
+      userId: request.createdBy,
+      groupName: request.name
+    };
+    return this.post<Group>('/groups/create', payload);
   }
 
   /**
@@ -216,14 +396,16 @@ export class ApiClient {
    * 加入群组
    */
   async joinGroup(groupId: string, userId: string): Promise<ApiResponse<void>> {
-    return this.post<void>('/api/groups/join', { groupId, userId });
+    const payload: BackendJoinGroupRequest = { userId: userId, invitationCode: groupId };
+    return this.post<void>('/groups/join', payload);
   }
 
   /**
    * 离开群组
    */
   async leaveGroup(groupId: string, userId: string): Promise<ApiResponse<void>> {
-    return this.post<void>('/api/groups/leave', { groupId, userId });
+    const payload: BackendLeaveGroupRequest = { userId: userId };
+    return this.post<void>(`/groups/${groupId}/leave`, payload);
   }
 
   // ==================== 用户设置 API ====================
@@ -232,18 +414,19 @@ export class ApiClient {
    * 获取用户设置
    */
   async getUserSettings(userId: string): Promise<ApiResponse<UserSettingsResponse>> {
-    return this.get<UserSettingsResponse>(`/api/settings/${userId}`);
+    return this.get<UserSettingsResponse>(`/users/${userId}/settings`);
   }
 
   /**
    * 更新用户设置
    */
   async updateUserSettings(userId: string, settings: UserSettings): Promise<ApiResponse<UserSettingsResponse>> {
-    return this.post<UserSettingsResponse>(`/api/settings/${userId}`, {
-      userId,
+    const payload: UpdateSettingsRequestBody = {
+      userId: userId,
       language: settings.language,
       defaultAgentInstruction: settings.defaultAgentInstruction
-    });
+    };
+    return this.put<UserSettingsResponse>(`/users/${userId}/settings`, payload);
   }
 
   // ==================== 搜索相关 API ====================
@@ -260,8 +443,12 @@ export class ApiClient {
   /**
    * 获取最新 APK 版本信息
    */
-  async getLatestVersion(): Promise<ApiResponse<{ versionName: string; versionCode: number; downloadUrl: string }>> {
-    return this.get<{ versionName: string; versionCode: number; downloadUrl: string }>('/api/version/latest');
+  async getLatestVersion(): Promise<ApiResponse<LatestVersionInfo>> {
+    return this.get<LatestVersionInfo>('/api/version/latest');
+  }
+
+  static getInstance(): ApiClient {
+    return apiClient;
   }
 }
 

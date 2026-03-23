@@ -1,27 +1,26 @@
-import { router } from '@kit.ArkUI';
-import { AppStore } from '../stores/AppStore';
 import { Group } from '../models/Group';
 import { GroupCard } from '../components/GroupCard';
 import { LoadingIndicator } from '../components/LoadingIndicator';
-import { Theme, SilkColors } from '../common/Theme';
-import { ApiClient } from '../api/ApiClient';
+import { SilkColors } from '../common/Theme';
+import { apiClient as globalApiClient } from '../api/ApiClient';
+import { router as appRouter } from '../common/Router';
+import { appStore as globalAppStore } from '../stores/AppStore';
 
-@Entry
 @Component
-struct GroupListPage {
+export struct GroupListPage {
   @State groups: Group[] = [];
   @State isLoading: boolean = false;
   @State showCreateDialog: boolean = false;
   @State newGroupName: string = '';
   @State errorMessage: string = '';
   
-  private appStore: AppStore = AppStore.getInstance();
-  private apiClient: ApiClient = ApiClient.getInstance();
+  private readonly appStore = globalAppStore;
+  private readonly apiClient = globalApiClient;
 
   async aboutToAppear(): Promise<void> {
     // 检查登录状态
     if (!this.appStore.isLoggedIn) {
-      router.replaceUrl({ url: 'pages/LoginPage' });
+      appRouter.goToLogin();
       return;
     }
     await this.loadGroups();
@@ -30,8 +29,8 @@ struct GroupListPage {
   async loadGroups(): Promise<void> {
     this.isLoading = true;
     try {
-      const groups = await this.apiClient.getGroups(this.appStore.currentUser!.id);
-      this.groups = groups;
+      const response = await this.apiClient.getGroups(this.appStore.currentUser!.id);
+      this.groups = response.data ? response.data : [];
     } catch (error) {
       this.errorMessage = '加载群组失败';
     } finally {
@@ -43,33 +42,34 @@ struct GroupListPage {
     if (!this.newGroupName.trim()) return;
     
     try {
-      const group = await this.apiClient.createGroup(
-        this.appStore.currentUser!.id,
-        this.newGroupName.trim()
-      );
-      this.groups = [...this.groups, group];
-      this.showCreateDialog = false;
-      this.newGroupName = '';
+      const response = await this.apiClient.createGroup({
+        name: this.newGroupName.trim(),
+        createdBy: this.appStore.currentUser!.id
+      });
+      if (response.success && response.data) {
+        this.groups = this.groups.concat([response.data]);
+        this.showCreateDialog = false;
+        this.newGroupName = '';
+      } else {
+        this.errorMessage = response.message ? response.message : '创建群组失败';
+      }
     } catch (error) {
       this.errorMessage = '创建群组失败';
     }
   }
 
   enterChat(group: Group): void {
-    this.appStore.currentGroup = group;
-    router.pushUrl({ 
-      url: 'pages/ChatPage',
-      params: { groupId: group.id, groupName: group.name }
-    });
+    this.appStore.setCurrentGroup(group);
+    appRouter.goToChat(group.id, group.name);
   }
 
   goToSettings(): void {
-    router.pushUrl({ url: 'pages/SettingsPage' });
+    appRouter.goToSettings();
   }
 
-  logout(): void {
-    this.appStore.logout();
-    router.replaceUrl({ url: 'pages/LoginPage' });
+  async logout(): Promise<void> {
+    await this.appStore.logout();
+    appRouter.goToLogin();
   }
 
   build() {
@@ -109,7 +109,9 @@ struct GroupListPage {
           .fontSize(14)
           .backgroundColor(SilkColors.surface)
           .fontColor(SilkColors.textSecondary)
-          .onClick(() => this.logout())
+          .onClick(() => {
+            this.logout();
+          })
       }
       .width('100%')
       .padding({ left: 16, right: 16, top: 8, bottom: 8 })
@@ -145,7 +147,7 @@ struct GroupListPage {
             ListItem() {
               GroupCard({ 
                 group: group,
-                onClick: () => this.enterChat(group)
+                onGroupClick: (selectedGroup: Group): void => this.enterChat(selectedGroup)
               })
             }
           }, (group: Group) => group.id)

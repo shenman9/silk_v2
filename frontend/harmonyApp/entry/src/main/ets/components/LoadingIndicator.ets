@@ -5,13 +5,13 @@
 @Component
 export struct LoadingIndicator {
   @Prop message: string = '加载中...'
-  @Prop size: number = 48
+  @Prop indicatorSize: number = 48
 
   build() {
     Column() {
       LoadingProgress()
-        .width(this.size)
-        .height(this.size)
+        .width(this.indicatorSize)
+        .height(this.indicatorSize)
         .color($r('app.color.primary'))
 
       if (this.message) {

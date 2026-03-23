@@ -1,19 +1,18 @@
-import { router } from '@kit.ArkUI';
-import { AppStore } from '../stores/AppStore';
-import { Theme, SilkColors } from '../common/Theme';
+import { AppStore, appStore as globalAppStore } from '../stores/AppStore';
+import { SilkColors } from '../common/Theme';
 import { UserSettings, Language } from '../models/UserSettings';
-import { ApiClient } from '../api/ApiClient';
-import { promptAction } from '@kit.ArkUI';
+import { apiClient as globalApiClient } from '../api/ApiClient';
+import { router as appRouter } from '../common/Router';
 
-@Entry
 @Component
-struct SettingsPage {
-  @State appStore: AppStore = AppStore.getInstance();
+export struct SettingsPage {
+  @State appStore: AppStore = globalAppStore;
   @State isLoading: boolean = false;
   @State defaultAgentInstruction: string = '';
   @State language: Language = Language.CHINESE;
+  @State statusMessage: string = '';
   
-  private apiClient: ApiClient = ApiClient.getInstance();
+  private readonly apiClient = globalApiClient;
 
   aboutToAppear() {
     // 加载当前设置
@@ -37,7 +36,7 @@ struct SettingsPage {
         .height(50)
         .backgroundColor(Color.Transparent)
         .onClick(() => {
-          router.back();
+          appRouter.goBack();
         })
 
         Text('设置')
@@ -70,6 +69,14 @@ struct SettingsPage {
 
           // 其他选项
           this.OtherOptions()
+
+          if (this.statusMessage) {
+            Text(this.statusMessage)
+              .fontSize(12)
+              .fontColor(SilkColors.textSecondary)
+              .width('100%')
+              .margin({ bottom: 12 })
+          }
 
           // 退出登录按钮
           this.LogoutButton()
@@ -204,13 +211,13 @@ struct SettingsPage {
   OtherOptions() {
     Column() {
       this.SettingItem('关于', '版本 1.0.0', () => {
-        promptAction.showToast({ message: 'Silk 鸿蒙版 v1.0.0' });
+        this.statusMessage = 'Silk 鸿蒙版 v1.0.0';
       })
 
       Divider().color(SilkColors.border).margin({ left: 16 })
 
       this.SettingItem('清除缓存', '', () => {
-        promptAction.showToast({ message: '缓存已清除' });
+        this.statusMessage = '缓存已清除';
       })
     }
     .width('100%')
@@ -263,7 +270,7 @@ struct SettingsPage {
         language: this.language,
         defaultAgentInstruction: this.defaultAgentInstruction
       };
-      this.appStore.updateUserSettings(settings);
+      await this.appStore.updateUserSettings(settings);
       
       // 同步到服务器
       const userId = this.appStore.getCurrentUser()?.id;
@@ -271,18 +278,17 @@ struct SettingsPage {
         await this.apiClient.updateUserSettings(userId, settings);
       }
       
-      promptAction.showToast({ message: '设置已保存' });
+      this.statusMessage = '设置已保存';
     } catch (e) {
-      promptAction.showToast({ message: '保存失败: ' + (e as Error).message });
+      const typedError = e as Error;
+      this.statusMessage = `保存失败: ${typedError.message}`;
     } finally {
       this.isLoading = false;
     }
   }
 
-  private logout() {
-    this.appStore.clearSession();
-    router.replaceUrl({
-      url: 'pages/LoginPage'
-    });
+  private async logout(): Promise<void> {
+    await this.appStore.clearSession();
+    appRouter.goToLogin();
   }
 }

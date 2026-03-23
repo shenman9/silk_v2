@@ -5,8 +5,9 @@
  */
 import { User } from '../models/User';
 import { Group } from '../models/Group';
-import { UserSettings, Language } from '../models/UserSettings';
-import { ApiClient } from '../api/ApiClient';
+import { UserSettings, createDefaultUserSettings } from '../models/UserSettings';
+import { CreateGroupRequest } from '../api/ApiClient';
+import { apiClient as globalApiClient } from '../api/ApiClient';
 import { PreferencesUtil } from '../common/PreferencesUtil';
 
 /**
@@ -34,7 +35,7 @@ export class AppStore {
   private _currentGroup: Group | null = null;
   
   // 设置状态
-  private _settings: UserSettings = new UserSettings();
+  private _settings: UserSettings = createDefaultUserSettings();
   
   // 连接状态
   private _connectionState: ConnectionState = ConnectionState.DISCONNECTED;
@@ -44,7 +45,7 @@ export class AppStore {
   private _errorMessage: string = '';
   
   // API 客户端
-  private apiClient: ApiClient = ApiClient.getInstance();
+  private readonly apiClient = globalApiClient;
   
   // ==================== 用户相关 ====================
   
@@ -70,14 +71,15 @@ export class AppStore {
     try {
       const response = await this.apiClient.login(username, password);
       
-      if (response.success && response.user) {
-        this._currentUser = response.user;
-        this._token = response.token || '';
+      const loginData = response.data;
+      if (response.success && loginData && loginData.user) {
+        this._currentUser = loginData.user;
+        this._token = loginData.token ? loginData.token : '';
         this._isLoggedIn = true;
         
         // 保存登录状态到本地存储
-        await PreferencesUtil.putString('userId', response.user.id);
-        await PreferencesUtil.putString('userName', response.user.name);
+        await PreferencesUtil.putString('userId', loginData.user.id);
+        await PreferencesUtil.putString('userName', loginData.user.name);
         await PreferencesUtil.putString('token', this._token);
         
         // 加载用户设置
@@ -89,7 +91,7 @@ export class AppStore {
         return false;
       }
     } catch (error) {
-      this._errorMessage = `登录错误: ${error}`;
+      this._errorMessage = `登录错误: ${this.errorToString(error)}`;
       return false;
     } finally {
       this._isLoading = false;
@@ -104,9 +106,14 @@ export class AppStore {
     this._errorMessage = '';
     
     try {
-      const response = await this.apiClient.register(username, password, fullName, phoneNumber);
+      const response = await this.apiClient.register({
+        loginName: username,
+        password: password,
+        fullName: fullName,
+        phoneNumber: phoneNumber
+      });
       
-      if (response.success && response.user) {
+      if (response.success) {
         // 注册成功后自动登录
         return await this.login(username, password);
       } else {
@@ -114,7 +121,7 @@ export class AppStore {
         return false;
       }
     } catch (error) {
-      this._errorMessage = `注册错误: ${error}`;
+      this._errorMessage = `注册错误: ${this.errorToString(error)}`;
       return false;
     } finally {
       this._isLoading = false;
@@ -146,7 +153,10 @@ export class AppStore {
     const token = await PreferencesUtil.getString('token');
     
     if (userId && userName && token) {
-      this._currentUser = new User(userId, userName);
+      this._currentUser = {
+        id: userId,
+        name: userName
+      };
       this._token = token;
       this._isLoggedIn = true;
       await this.loadSettings();
@@ -165,6 +175,10 @@ export class AppStore {
   get currentGroup(): Group | null {
     return this._currentGroup;
   }
+
+  set currentGroup(group: Group | null) {
+    this._currentGroup = group;
+  }
   
   /**
    * 加载用户的群组列表
@@ -174,10 +188,12 @@ export class AppStore {
     
     this._isLoading = true;
     try {
-      const groups = await this.apiClient.getGroups(this._currentUser.id);
-      this._groups = groups;
+      const response = await this.apiClient.getGroups(this._currentUser.id);
+      if (response.success && response.data) {
+        this._groups = response.data;
+      }
     } catch (error) {
-      console.error(`加载群组失败: ${error}`);
+      console.error(`加载群组失败: ${this.errorToString(error)}`);
     } finally {
       this._isLoading = false;
     }
@@ -198,13 +214,20 @@ export class AppStore {
     
     this._isLoading = true;
     try {
-      const group = await this.apiClient.createGroup(this._currentUser.id, name, description);
-      if (group) {
-        this._groups = [...this._groups, group];
+      const request: CreateGroupRequest = {
+        name: name,
+        description: description,
+        createdBy: this._currentUser.id
+      };
+      const response = await this.apiClient.createGroup(request);
+      const group = response.data ? response.data : null;
+      if (response.success && group) {
+        const nextGroups: Group[] = this._groups.concat([group]);
+        this._groups = nextGroups;
       }
       return group;
     } catch (error) {
-      console.error(`创建群组失败: ${error}`);
+      console.error(`创建群组失败: ${this.errorToString(error)}`);
       return null;
     } finally {
       this._isLoading = false;
@@ -224,12 +247,12 @@ export class AppStore {
     if (!this._currentUser) return;
     
     try {
-      const settings = await this.apiClient.getUserSettings(this._currentUser.id);
-      if (settings) {
-        this._settings = settings;
+      const response = await this.apiClient.getUserSettings(this._currentUser.id);
+      if (response.success && response.data && response.data.settings) {
+        this._settings = response.data.settings;
       }
     } catch (error) {
-      console.error(`加载设置失败: ${error}`);
+      console.error(`加载设置失败: ${this.errorToString(error)}`);
     }
   }
   
@@ -247,7 +270,7 @@ export class AppStore {
       }
       return false;
     } catch (error) {
-      console.error(`更新设置失败: ${error}`);
+      console.error(`更新设置失败: ${this.errorToString(error)}`);
       return false;
     }
   }
@@ -278,6 +301,41 @@ export class AppStore {
   
   setLoading(loading: boolean): void {
     this._isLoading = loading;
+  }
+
+  // ==================== 兼容页面层调用 ====================
+
+  getCurrentUser(): User | null {
+    return this._currentUser;
+  }
+
+  getUserSettings(): UserSettings {
+    return this._settings;
+  }
+
+  async updateUserSettings(settings: UserSettings): Promise<boolean> {
+    return this.updateSettings(settings);
+  }
+
+  async clearSession(): Promise<void> {
+    await this.logout();
+  }
+
+  setCurrentUser(user: User): void {
+    this._currentUser = user;
+    this._isLoggedIn = true;
+  }
+
+  private errorToString(error: Object): string {
+    const typedError = error as Error;
+    if (typedError && typedError.message) {
+      return typedError.message;
+    }
+    return 'unknown error';
+  }
+
+  static getInstance(): AppStore {
+    return appStore;
   }
 }
 

@@ -1,138 +1,64 @@
-import { Router } from '@ohos.router';
-import { Message, MessageType, MessageCategory } from '../models/Message';
-import { ChatStore, ConnectionState } from '../stores/ChatStore';
-import { AppStore } from '../stores/AppStore';
-import { Theme, SilkColors } from '../common/Theme';
+import { Message } from '../models/Message';
+import { chatStore as globalChatStore, ConnectionState } from '../stores/ChatStore';
+import { AppStore, appStore as globalAppStore } from '../stores/AppStore';
+import { ChatStore } from '../stores/ChatStore';
+import { SilkColors } from '../common/Theme';
 import { MessageBubble } from '../components/MessageBubble';
 import { ChatInput } from '../components/ChatInput';
 import { LoadingIndicator } from '../components/LoadingIndicator';
-import { WebSocketClient } from '../api/WebSocketClient';
-import { Constants } from '../common/Constants';
+import { router as appRouter } from '../common/Router';
 
-interface ChatPageParams {
-  groupId: string;
-  groupName: string;
-}
-
-@Entry
 @Component
-struct ChatPage {
-  @State chatStore: ChatStore = ChatStore.getInstance();
-  @State appStore: AppStore = AppStore.getInstance();
+export struct ChatPage {
+  @State chatStore: ChatStore = globalChatStore;
+  @State appStore: AppStore = globalAppStore;
   @State messageInput: string = '';
-  @State isLoading: boolean = false;
-  @State showError: boolean = false;
-  @State errorMessage: string = '';
   
   private scroller: Scroller = new Scroller();
-  private webSocketClient: WebSocketClient | null = null;
   private groupId: string = '';
   private groupName: string = '';
 
-  aboutToAppear() {
-    const params = Router.getParams() as ChatPageParams;
-    if (params) {
-      this.groupId = params.groupId || 'default_room';
-      this.groupName = params.groupName || '聊天室';
-    }
-    this.connectWebSocket();
+  aboutToAppear(): void {
+    const currentGroup = this.appStore.currentGroup;
+    this.groupId = currentGroup ? currentGroup.id : 'default_room';
+    this.groupName = currentGroup ? currentGroup.name : '聊天室';
+    this.connectChat();
   }
 
-  aboutToDisappear() {
-    this.disconnectWebSocket();
+  aboutToDisappear(): void {
+    this.disconnectChat();
   }
 
-  private connectWebSocket() {
+  private connectChat(): void {
     const user = this.appStore.currentUser;
     if (!user) {
-      Router.replaceUrl({ url: 'pages/LoginPage' });
+      appRouter.goToLogin();
       return;
     }
 
-    const wsUrl = `${Constants.WS_BASE_URL}/chat?userId=${user.id}&userName=${encodeURIComponent(user.name)}&groupId=${this.groupId}`;
-    
-    this.webSocketClient = new WebSocketClient();
-    this.webSocketClient.connect(
-      wsUrl,
-      (message: string) => this.handleIncomingMessage(message),
-      () => {
-        this.chatStore.setConnectionState(ConnectionState.CONNECTED);
-      },
-      () => {
-        this.chatStore.setConnectionState(ConnectionState.DISCONNECTED);
-      },
-      (error: string) => {
-        this.showError = true;
-        this.errorMessage = error;
-      }
-    );
-    this.chatStore.setConnectionState(ConnectionState.CONNECTING);
-  }
-
-  private disconnectWebSocket() {
-    if (this.webSocketClient) {
-      this.webSocketClient.disconnect();
-      this.webSocketClient = null;
-    }
-  }
-
-  private handleIncomingMessage(messageJson: string) {
-    try {
-      const msg: Message = JSON.parse(messageJson);
-      this.chatStore.addMessage(msg);
-      
-      // 滚动到底部
-      setTimeout(() => {
-        this.scroller.scrollEdge(Edge.Bottom);
-      }, 100);
-    } catch (e) {
-      console.error('Failed to parse message:', e);
-    }
-  }
-
-  private async sendMessage() {
-    if (!this.messageInput.trim() || !this.webSocketClient) {
-      return;
-    }
-
-    const user = this.appStore.currentUser;
-    if (!user) return;
-
-    const message: Message = {
-      id: `${Date.now()}_${Math.floor(Math.random() * 10000)}`,
-      userId: user.id,
-      userName: user.name,
-      content: this.messageInput.trim(),
-      timestamp: Date.now(),
-      type: MessageType.TEXT,
-      isTransient: false,
-      category: MessageCategory.NORMAL
+    this.chatStore.onMessagesChanged = (): void => {
+      this.scrollToBottom();
     };
-
-    // 立即显示消息
-    this.chatStore.addMessage(message);
-    
-    // 发送到服务器
-    this.webSocketClient.send(JSON.stringify(message));
-    
-    // 清空输入
-    this.messageInput = '';
-    
-    // 滚动到底部
-    setTimeout(() => {
-      this.scroller.scrollEdge(Edge.Bottom);
-    }, 100);
+    this.chatStore.connect(user.id, user.name, this.groupId);
   }
 
-  private async sendAiMessage() {
-    if (!this.messageInput.trim() || !this.webSocketClient) {
+  private disconnectChat(): void {
+    this.chatStore.disconnect();
+    this.chatStore.onMessagesChanged = null;
+  }
+
+  private sendMessage(message: string): void {
+    if (!message.trim()) {
       return;
     }
+    this.chatStore.sendMessage(message);
+    this.scrollToBottom();
+  }
 
-    // 先发送用户消息
-    await this.sendMessage();
-    
-    // AI 消息发送后由服务端处理，无需额外操作
+  private scrollToBottom(): void {
+    setTimeout((): void => {
+      this.scroller.scrollEdge(Edge.Bottom);
+    }, 80);
   }
 
   build() {
@@ -160,11 +86,13 @@ struct ChatPage {
   buildHeader() {
     Row() {
       // 返回按钮
-      Image($r('app.media.ic_back'))
-        .width(24)
-        .height(24)
+      Text('<')
+        .fontSize(22)
+        .fontColor(SilkColors.textPrimary)
         .margin({ left: 16 })
-        .onClick(() => Router.back())
+        .onClick((): void => {
+          appRouter.goToGroupList();
+        })
       
       // 群组名称
       Text(this.groupName)
@@ -175,15 +103,12 @@ struct ChatPage {
         .layoutWeight(1)
       
       // 设置按钮
-      Image($r('app.media.ic_settings'))
-        .width(24)
-        .height(24)
+      Text('⚙')
+        .fontSize(20)
+        .fontColor(SilkColors.textSecondary)
         .margin({ right: 16 })
-        .onClick(() => {
-          Router.pushUrl({
-            url: 'pages/SettingsPage',
-            params: { groupId: this.groupId }
-          });
+        .onClick((): void => {
+          appRouter.goToSettings();
         })
     }
     .width('100%')
@@ -206,7 +131,7 @@ struct ChatPage {
     .width('100%')
     .height(32)
     .justifyContent(FlexAlign.Center)
-    .backgroundColor(SilkColors.warning.withOpacity(0.1))
+    .backgroundColor('#FDF3E0')
   }
 
   @Builder
@@ -228,9 +153,9 @@ struct ChatPage {
   @Builder
   buildInputArea() {
     ChatInput({
+      messageText: $messageInput,
       placeholder: '输入消息...',
-      onSend: () => this.sendMessage(),
-      onAiSend: () => this.sendAiMessage()
+      onSend: (message: string): void => this.sendMessage(message)
     })
   }
 }

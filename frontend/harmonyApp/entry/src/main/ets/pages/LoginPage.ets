@@ -1,16 +1,15 @@
-import { router } from '@kit.ArkUI';
-import { promptAction } from '@kit.ArkUI';
-import { ApiClient } from '../api/ApiClient';
-import { AppStore } from '../stores/AppStore';
-import { Theme, SilkColors } from '../common/Theme';
+import { apiClient as globalApiClient } from '../api/ApiClient';
+import { appStore } from '../stores/AppStore';
+import { SilkColors } from '../common/Theme';
+import { User } from '../models/User';
+import { router as appRouter } from '../common/Router';
 
 /**
  * 登录页面
  * 支持登录和注册两种模式
  */
-@Entry
 @Component
-struct LoginPage {
+export struct LoginPage {
   // 状态
   @State isLogin: boolean = true; // true = 登录, false = 注册
   @State username: string = '';
@@ -20,7 +19,7 @@ struct LoginPage {
   @State isLoading: boolean = false;
   @State errorMessage: string = '';
 
-  private apiClient: ApiClient = new ApiClient();
+  private readonly apiClient = globalApiClient;
 
   build() {
     Column() {
@@ -245,17 +244,15 @@ struct LoginPage {
     try {
       const response = await this.apiClient.login(this.username, this.password);
 
-      if (response.success && response.user) {
+      const loginData = response.data;
+      if (response.success && loginData && loginData.user) {
         // 保存用户信息到全局状态
-        AppStore.getInstance().setCurrentUser(response.user);
+        appStore.setCurrentUser(loginData.user);
 
         // 保存登录状态
-        await this.saveLoginState(response.user);
+        await this.saveLoginState(loginData.user);
 
-        // 跳转到群组列表页面
-        router.replaceUrl({
-          url: 'pages/GroupListPage'
-        });
+        appRouter.goToGroupList();
       } else {
         this.errorMessage = response.message || '登录失败，请检查用户名和密码';
       }
@@ -274,19 +271,18 @@ struct LoginPage {
 
     try {
       const response = await this.apiClient.register(
-        this.username,
-        this.password,
-        this.fullName,
-        this.phoneNumber
+        {
+          loginName: this.username,
+          password: this.password,
+          fullName: this.fullName,
+          phoneNumber: this.phoneNumber
+        }
       );
 
       if (response.success) {
         // 注册成功，切换到登录
         this.isLogin = true;
-        promptAction.showToast({
-          message: '注册成功，请登录',
-          duration: 2000
-        });
+        this.errorMessage = '注册成功，请登录';
       } else {
         this.errorMessage = response.message || '注册失败';
       }
@@ -299,7 +295,7 @@ struct LoginPage {
   }
 
   // 保存登录状态
-  private async saveLoginState(user: any): Promise<void> {
+  private async saveLoginState(user: User): Promise<void> {
     // 使用 Preferences 保存用户信息
     // 这里简化处理，实际应用中需要使用持久化存储
     console.log('保存用户信息:', user);
