@@ -12,11 +12,13 @@ import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -26,6 +28,7 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Share
@@ -46,6 +49,7 @@ import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
@@ -66,6 +70,9 @@ import java.net.URL
 import java.text.SimpleDateFormat
 import java.util.*
 import org.json.JSONObject
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import androidx.compose.ui.viewinterop.AndroidView
 
 // Web版的 collectAsState 实现
 @Composable
@@ -207,6 +214,8 @@ fun ChatScreen(appState: AppState) {
     var userGroups by remember { mutableStateOf<List<Group>>(emptyList()) }
     var isLoadingGroups by remember { mutableStateOf(false) }
     var forwardResult by remember { mutableStateOf<String?>(null) }
+    // ✅ 单条消息转发状态（用于 AI 消息等直接点击转发按钮的情况）
+    var messageToForward by remember { mutableStateOf<Message?>(null) }
     
     // 添加联系人对话框状态
     var showAddContactConfirm by remember { mutableStateOf<Message?>(null) }
@@ -1012,6 +1021,26 @@ fun ChatScreen(appState: AppState) {
                             onAIExpandChange = { messageId, isExpanded ->
                                 // 只切换展开状态，不做任何列表滚动，避免视图跳动
                                 aiMessageExpandedStates[messageId] = isExpanded
+                            },
+                            // 复制功能
+                            onCopy = { content ->
+                                val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) 
+                                    as android.content.ClipboardManager
+                                val clip = android.content.ClipData.newPlainText("消息", content)
+                                clipboard.setPrimaryClip(clip)
+                                android.widget.Toast.makeText(context, "已复制到剪贴板", android.widget.Toast.LENGTH_SHORT).show()
+                            },
+                            // 转发功能 - 单条消息转发
+                            onForward = { msg ->
+                                // 设置要转发的单条消息
+                                messageToForward = msg
+                                scope.launch {
+                                    isLoadingGroups = true
+                                    val response = ApiClient.getUserGroups(user.id)
+                                    userGroups = response.groups?.filter { it.id != group.id } ?: emptyList()
+                                    isLoadingGroups = false
+                                    showForwardToGroupDialog = true
+                                }
                             }
                         )
                     }
@@ -1547,17 +1576,22 @@ fun ChatScreen(appState: AppState) {
     
     // ==================== 转发到群组对话框 ====================
     if (showForwardToGroupDialog) {
+        // 支持单条消息转发（AI消息）和多条消息转发（选择模式）
+        val messagesToForward = if (messageToForward != null) {
+            listOf(messageToForward!!)
+        } else {
+            messages.filter { selectedMessages.contains(it.id) }.sortedBy { it.timestamp }
+        }
+        
         ForwardToGroupDialog(
             groups = userGroups,
             isLoading = isLoadingGroups,
-            selectedMessages = messages.filter { selectedMessages.contains(it.id) }.sortedBy { it.timestamp },
+            selectedMessages = messagesToForward,
             currentUser = user,
             onForward = { targetGroup ->
                 scope.launch {
                     forwardResult = null
-                    val selectedContent = messages
-                        .filter { selectedMessages.contains(it.id) }
-                        .sortedBy { it.timestamp }
+                    val selectedContent = messagesToForward
                         .joinToString("\n\n") { msg ->
                             val time = SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).apply {
                                 timeZone = java.util.TimeZone.getTimeZone("Asia/Shanghai")
@@ -1578,13 +1612,14 @@ fun ChatScreen(appState: AppState) {
                         forwardResult = "✅ 已转发到 ${targetGroup.name}"
                         android.widget.Toast.makeText(
                             context,
-                            "已转发 ${selectedMessages.size} 条消息到 ${targetGroup.name}",
+                            "已转发 ${messagesToForward.size} 条消息到 ${targetGroup.name}",
                             android.widget.Toast.LENGTH_SHORT
                         ).show()
                         kotlinx.coroutines.delay(1000)
                         showForwardToGroupDialog = false
                         isSelectionMode = false
                         selectedMessages.clear()
+                        messageToForward = null  // 清除单条消息转发状态
                         forwardResult = null
                     } else {
                         forwardResult = "❌ 转发失败"
@@ -1593,6 +1628,7 @@ fun ChatScreen(appState: AppState) {
             },
             onDismiss = {
                 showForwardToGroupDialog = false
+                messageToForward = null  // 清除单条消息转发状态
                 forwardResult = null
             },
             result = forwardResult
@@ -1779,10 +1815,10 @@ fun AIMessageCardAndroid(
                             .heightIn(max = 360.dp)
                             .verticalScroll(rememberScrollState())
                     ) {
-                        MarkdownContentAndroid(message.content)
+                        MarkdownWebView(message.content)
                     }
                 } else {
-                    MarkdownContentAndroid(message.content)
+                    MarkdownWebView(message.content)
                 }
             } else {
                 Text(
@@ -1851,21 +1887,591 @@ fun AIMessageCardAndroid(
     }
 }
 
+// ==================== 代码语法高亮颜色配置 ====================
+private val codeColors = mapOf(
+    // 关键字
+    "keyword" to Color(0xFFCF8E6D),      // 橙色
+    "string" to Color(0xFF6AAB73),       // 绿色
+    "number" to Color(0xFFB8A965),       // 黄色
+    "comment" to Color(0xFF6A7B8C),      // 灰色
+    "function" to Color(0xFF79C0FF),     // 蓝色
+    "operator" to Color(0xFFFF79C6),     // 粉色
+    "punctuation" to Color(0xFFE8E0D4),  // 浅灰
+    "variable" to Color(0xFFE0E0E0),     // 白色
+    "type" to Color(0xFF9CDCFE),         // 青色
+    "builtin" to Color(0xFFCE9178)       // 棕色
+)
+
+private val keywordSet = setOf(
+    "fun", "val", "var", "if", "else", "when", "for", "while", "do", "return",
+    "class", "interface", "object", "enum", "sealed", "data", "abstract",
+    "override", "private", "public", "protected", "internal", "open", "final",
+    "suspend", "inline", "reified", "crossinline", "noinline",
+    "import", "package", "as", "is", "in", "out", "by", "lazy", "lateinit",
+    "companion", "constructor", "init", "get", "set", "where", "typealias",
+    "true", "false", "null", "this", "super", "it", "self",
+    "def", "lambda", "pass", "raise", "try", "except", "finally", "with",
+    "yield", "global", "nonlocal", "assert", "async", "await",
+    "const", "let", "function", "typeof", "new", "delete", "void",
+    "static", "struct", "union", "sizeof", "typedef", "extern",
+    "break", "continue", "goto", "switch", "case", "default",
+    "throw", "throws", "implements", "extends", "instanceof",
+    "protocol", "extension", "guard", "defer", "vararg"
+)
+
+private val builtinSet = setOf(
+    "print", "println", "log", "debug", "info", "warn", "error",
+    "listOf", "setOf", "mapOf", "arrayOf", "mutableListOf", "mutableSetOf",
+    "mutableMapOf", "intArrayOf", "doubleArrayOf", "booleanArrayOf",
+    "size", "length", "isEmpty", "isNotEmpty", "contains", "get", "put",
+    "add", "remove", "clear", "first", "last", "take", "drop", "filter",
+    "map", "reduce", "fold", "forEach", "apply", "also", "let", "run", "with",
+    "toInt", "toString", "toDouble", "toFloat", "toLong", "toBoolean",
+    "split", "join", "joinToString", "trim", "substring", "replace",
+    "range", "ranges", "until", "downTo", "step",
+    "len", "str", "int", "float", "bool", "dict", "tuple", "set",
+    "append", "extend", "insert", "pop", "keys", "values", "items",
+    "console", "window", "document", "Math", "Array", "Object", "String", "Number",
+    "require", "module", "exports", "define", "setTimeout", "setInterval"
+)
+
 /**
- * Markdown 内容渲染 - Android 端
+ * 简单的代码语法高亮
+ */
+private fun highlightCode(code: String, language: String): AnnotatedString {
+    return buildAnnotatedString {
+        val lines = code.lines()
+        lines.forEachIndexed { lineIndex, line ->
+            if (lineIndex > 0) append("\n")
+            highlightLine(line, language)
+        }
+    }
+}
+
+private fun AnnotatedString.Builder.highlightLine(line: String, language: String) {
+    var i = 0
+    val lang = language.lowercase()
+    
+    while (i < line.length) {
+        // 跳过空格
+        if (line[i].isWhitespace()) {
+            append(line[i])
+            i++
+            continue
+        }
+        
+        // 注释
+        if (line.substring(i).startsWith("//") || 
+            (lang == "python" && line[i] == '#')) {
+            withStyle(androidx.compose.ui.text.SpanStyle(color = codeColors["comment"]!!)) {
+                append(line.substring(i))
+            }
+            return
+        }
+        
+        // 字符串字面量
+        if (line[i] == '"' || line[i] == '\'' || line[i] == '`') {
+            val quote = line[i]
+            val start = i
+            i++
+            while (i < line.length && line[i] != quote) {
+                if (line[i] == '\\' && i + 1 < line.length) i++
+                i++
+            }
+            if (i < line.length) i++
+            withStyle(androidx.compose.ui.text.SpanStyle(color = codeColors["string"]!!)) {
+                append(line.substring(start, i))
+            }
+            continue
+        }
+        
+        // 数字
+        if (line[i].isDigit() || (line[i] == '-' && i + 1 < line.length && line[i + 1].isDigit())) {
+            val start = i
+            if (line[i] == '-') i++
+            while (i < line.length && (line[i].isDigit() || line[i] == '.' || line[i] == 'x' || line[i] == 'X')) {
+                i++
+            }
+            withStyle(androidx.compose.ui.text.SpanStyle(color = codeColors["number"]!!)) {
+                append(line.substring(start, i))
+            }
+            continue
+        }
+        
+        // 标识符（关键字、内置函数、变量）
+        if (line[i].isLetter() || line[i] == '_') {
+            val start = i
+            while (i < line.length && (line[i].isLetterOrDigit() || line[i] == '_')) {
+                i++
+            }
+            val word = line.substring(start, i)
+            when {
+                keywordSet.contains(word) -> {
+                    withStyle(androidx.compose.ui.text.SpanStyle(color = codeColors["keyword"]!!)) {
+                        append(word)
+                    }
+                }
+                builtinSet.contains(word) -> {
+                    withStyle(androidx.compose.ui.text.SpanStyle(color = codeColors["builtin"]!!)) {
+                        append(word)
+                    }
+                }
+                i < line.length && line[i] == '(' -> {
+                    withStyle(androidx.compose.ui.text.SpanStyle(color = codeColors["function"]!!)) {
+                        append(word)
+                    }
+                }
+                word.first().isUpperCase() -> {
+                    withStyle(androidx.compose.ui.text.SpanStyle(color = codeColors["type"]!!)) {
+                        append(word)
+                    }
+                }
+                else -> {
+                    withStyle(androidx.compose.ui.text.SpanStyle(color = codeColors["variable"]!!)) {
+                        append(word)
+                    }
+                }
+            }
+            continue
+        }
+        
+        // 操作符
+        if (line[i] in setOf('+', '-', '*', '/', '=', '!', '<', '>', '&', '|', '^', '~', '?', ':')) {
+            val start = i
+            while (i < line.length && line[i] in setOf('+', '-', '*', '/', '=', '!', '<', '>', '&', '|', '^', '~', '?', ':')) {
+                i++
+            }
+            withStyle(androidx.compose.ui.text.SpanStyle(color = codeColors["operator"]!!)) {
+                append(line.substring(start, i))
+            }
+            continue
+        }
+        
+        // 标点符号
+        if (line[i] in setOf('(', ')', '{', '}', '[', ']', ',', ';', '.')) {
+            withStyle(androidx.compose.ui.text.SpanStyle(color = codeColors["punctuation"]!!)) {
+                append(line[i])
+            }
+            i++
+            continue
+        }
+        
+        // 其他字符
+        withStyle(androidx.compose.ui.text.SpanStyle(color = codeColors["variable"]!!)) {
+            append(line[i])
+        }
+        i++
+    }
+}
+
+// ==================== 数学公式解析 ====================
+
+/**
+ * 简化的数学公式渲染
+ * 支持上下标、分数、根号、希腊字母等
+ */
+@Composable
+fun MathFormulaAndroid(formula: String, isBlock: Boolean = false) {
+    val processedFormula = remember(formula) { processMathFormula(formula) }
+    
+    if (isBlock) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 4.dp),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFFF8F9FA)),
+            shape = RoundedCornerShape(8.dp)
+        ) {
+            Text(
+                text = processedFormula,
+                style = MaterialTheme.typography.bodyMedium,
+                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                color = Color(0xFF1A1A2E),
+                modifier = Modifier.padding(12.dp)
+            )
+        }
+    } else {
+        Text(
+            text = processedFormula,
+            style = MaterialTheme.typography.bodySmall,
+            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+            color = Color(0xFF1A1A2E)
+        )
+    }
+}
+
+private fun processMathFormula(formula: String): String {
+    var result = formula.trim()
+    
+    // 移除外层分隔符
+    if (result.startsWith("$$") && result.endsWith("$$")) {
+        result = result.removePrefix("$$").removeSuffix("$$").trim()
+    } else if (result.startsWith("$") && result.endsWith("$")) {
+        result = result.removePrefix("$").removeSuffix("$").trim()
+    }
+    
+    // 处理 \sqrt[n]{x} -> ⁿ√x
+    val sqrtNPattern = Regex("""\\sqrt\[(\d+)\]\{([^}]+)\}""")
+    result = sqrtNPattern.replace(result) { match ->
+        "${match.groupValues[1]}√(${match.groupValues[2]})"
+    }
+    
+    // 处理 \sqrt{x} -> √x
+    val sqrtPattern = Regex("""\\sqrt\{([^}]+)\}""")
+    result = sqrtPattern.replace(result) { match ->
+        "√(${match.groupValues[1]})"
+    }
+    
+    // 处理分数 \frac{a}{b} -> (a)/(b)
+    val fracPattern = Regex("""\\frac\{([^{}]+)\}\{([^{}]+)\}""")
+    result = fracPattern.replace(result) { match ->
+        val numerator = match.groupValues[1]
+        val denominator = match.groupValues[2]
+        "($numerator)/($denominator)"
+    }
+    
+    // 直接替换 LaTeX 命令
+    val replacements = listOf(
+        // 希腊字母（小写）
+        """\alpha""" to "α", """\beta""" to "β", """\gamma""" to "γ", """\delta""" to "δ",
+        """\epsilon""" to "ε", """\varepsilon""" to "ε", """\zeta""" to "ζ", """\eta""" to "η",
+        """\theta""" to "θ", """\vartheta""" to "θ", """\iota""" to "ι", """\kappa""" to "κ",
+        """\lambda""" to "λ", """\mu""" to "μ", """\nu""" to "ν", """\xi""" to "ξ",
+        """\pi""" to "π", """\varpi""" to "π", """\rho""" to "ρ", """\varrho""" to "ρ",
+        """\sigma""" to "σ", """\varsigma""" to "σ", """\tau""" to "τ", """\upsilon""" to "υ",
+        """\phi""" to "φ", """\varphi""" to "φ", """\chi""" to "χ", """\psi""" to "ψ", """\omega""" to "ω",
+        // 希腊字母（大写）
+        """\Gamma""" to "Γ", """\Delta""" to "Δ", """\Theta""" to "Θ",
+        """\Lambda""" to "Λ", """\Xi""" to "Ξ", """\Pi""" to "Π",
+        """\Sigma""" to "∑", """\Phi""" to "Φ", """\Psi""" to "Ψ", """\Omega""" to "Ω",
+        // 数学运算符
+        """\infty""" to "∞", """\partial""" to "∂", """\nabla""" to "∇",
+        """\forall""" to "∀", """\exists""" to "∃", """\in""" to "∈", """\notin""" to "∉",
+        """\subset""" to "⊂", """\supset""" to "⊃", """\cup""" to "∪", """\cap""" to "∩",
+        """\leq""" to "≤", """\geq""" to "≥", """\neq""" to "≠", """\approx""" to "≈",
+        """\equiv""" to "≡", """\sim""" to "∼", """\propto""" to "∝",
+        """\pm""" to "±", """\mp""" to "∓", """\times""" to "×", """\div""" to "÷",
+        """\cdot""" to "·", """\ast""" to "∗", """\star""" to "⋆",
+        """\oplus""" to "⊕", """\ominus""" to "⊖", """\otimes""" to "⊗", """\odot""" to "⊙",
+        // 箭头
+        """\rightarrow""" to "→", """\leftarrow""" to "←", """\Rightarrow""" to "⇒",
+        """\Leftarrow""" to "⇐", """\leftrightarrow""" to "↔", """\Leftrightarrow""" to "⇔",
+        """\mapsto""" to "↦", """\to""" to "→",
+        // 大运算符
+        """\sum""" to "∑", """\prod""" to "∏", """\int""" to "∫",
+        """\iint""" to "∬", """\iiint""" to "∭", """\oint""" to "∮",
+        """\lim""" to "lim", """\log""" to "log", """\ln""" to "ln",
+        """\exp""" to "exp", """\min""" to "min", """\max""" to "max",
+        // 其他
+        """\prime""" to "′", """\degree""" to "°", """\angle""" to "∠",
+        """\triangle""" to "△", """\square""" to "□", """\circ""" to "∘",
+        """\vert""" to "|", """\Vert""" to "‖", """\ldots""" to "…", """\cdots""" to "⋯",
+        """\vdots""" to "⋮", """\ddots""" to "⋱",
+        """\Re""" to "ℜ", """\Im""" to "ℑ", """\emptyset""" to "∅",
+        // 括号
+        """\left(""" to "(", """\right)""" to ")",
+        """\left[""" to "[", """\right]""" to "]",
+        """\left{""" to "{", """\right}""" to "}",
+        """\left|""" to "|", """\right|""" to "|",
+        // 环境和其他命令
+        """\mathbf{""" to "", """\text{""" to "", """\mathrm{""" to "",
+        """\begin{aligned}""" to "", """\end{aligned}""" to "",
+        """\begin{pmatrix}""" to "[", """\end{pmatrix}""" to "]",
+        """\begin{bmatrix}""" to "[", """\end{bmatrix}""" to "]",
+        """\begin{vmatrix}""" to "|", """\end{vmatrix}""" to "|",
+        """\begin{cases}""" to "", """\end{cases}""" to "",
+        // 空格
+        """\,""" to " ", """\;""" to " ", """\quad""" to "  ", """\qquad""" to "    ",
+        """\!""" to "",
+        // 换行（LaTeX的 \\）
+        """\\""" to "; "
+    )
+    
+    for ((latex, symbol) in replacements) {
+        result = result.replace(latex, symbol)
+    }
+    
+    // Unicode 上标字符映射
+    val superscriptMap = mapOf(
+        '0' to '⁰', '1' to '¹', '2' to '²', '3' to '³', '4' to '⁴',
+        '5' to '⁵', '6' to '⁶', '7' to '⁷', '8' to '⁸', '9' to '⁹',
+        '+' to '⁺', '-' to '⁻', '=' to '⁼', '(' to '⁽', ')' to '⁾',
+        'n' to 'ⁿ', 'i' to 'ⁱ', 'x' to 'ˣ', 'a' to 'ᵃ', 'b' to 'ᵇ',
+        'c' to 'ᶜ', 'd' to 'ᵈ', 'e' to 'ᵉ', 'f' to 'ᶠ', 'g' to 'ᵍ',
+        'h' to 'ʰ', 'k' to 'ᵏ', 'l' to 'ˡ', 'm' to 'ᵐ', 'o' to 'ᵒ',
+        'p' to 'ᵖ', 'r' to 'ʳ', 's' to 'ˢ', 't' to 'ᵗ', 'u' to 'ᵘ',
+        'v' to 'ᵛ', 'w' to 'ʷ'
+    )
+    // Unicode 下标字符映射
+    val subscriptMap = mapOf(
+        '0' to '₀', '1' to '₁', '2' to '₂', '3' to '₃', '4' to '₄',
+        '5' to '₅', '6' to '₆', '7' to '₇', '8' to '₈', '9' to '₉',
+        '+' to '₊', '-' to '₋', '=' to '₌', '(' to '₍', ')' to '₎',
+        'a' to 'ₐ', 'e' to 'ₑ', 'i' to 'ᵢ', 'o' to 'ₒ', 'r' to 'ᵣ',
+        'u' to 'ᵤ', 'v' to 'ᵥ', 'x' to 'ₓ', 'k' to 'ₖ', 'n' to 'ₙ',
+        'p' to 'ₚ', 's' to 'ₛ', 't' to 'ₜ', 'j' to 'ⱼ'
+    )
+    
+    // 处理上标 ^{...}
+    val upperLimitPattern = Regex("""\^\{([^}]+)\}""")
+    result = upperLimitPattern.replace(result) { match ->
+        val content = match.groupValues[1]
+        val superscript = content.map { c -> superscriptMap[c] ?: c }.joinToString("")
+        superscript
+    }
+    
+    // 处理下标 _{...}
+    val lowerLimitPattern = Regex("""_\{([^}]+)\}""")
+    result = lowerLimitPattern.replace(result) { match ->
+        val content = match.groupValues[1]
+        val subscript = content.map { c -> subscriptMap[c] ?: c }.joinToString("")
+        subscript
+    }
+    
+    // 处理单字符上标 x^n
+    val superSinglePattern = Regex("""\^([0-9a-zA-Z+-])""")
+    result = superSinglePattern.replace(result) { match ->
+        val c = match.groupValues[1][0]
+        (superscriptMap[c] ?: "^$c").toString()
+    }
+    
+    // 处理单字符下标 x_n
+    val subSinglePattern = Regex("""_([0-9a-zA-Z+-])""")
+    result = subSinglePattern.replace(result) { match ->
+        val c = match.groupValues[1][0]
+        (subscriptMap[c] ?: "_$c").toString()
+    }
+    
+    // 移除未配对的花括号
+    result = result.replace("{", "").replace("}", "")
+    
+    // 清理多余的空格
+    result = result.trim()
+    result = result.replace(Regex("""\s+"""), " ")
+    
+    return result
+}
+
+// ==================== 表格解析 ====================
+
+/**
+ * Markdown 表格组件
+ */
+@Composable
+fun MarkdownTableAndroid(lines: List<String>) {
+    if (lines.isEmpty()) return
+    
+    val hasHeader = lines.size > 1 && lines[1].contains("|") && 
+                    lines[1].all { it == '|' || it == '-' || it == ' ' || it == ':' }
+    
+    val headerLine = if (hasHeader) lines[0] else ""
+    val dataLines = if (hasHeader) lines.drop(2) else lines
+    
+    val parseRow: (String) -> List<String> = { line ->
+        line.split("|")
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+    }
+    
+    val headerCells = if (hasHeader) parseRow(headerLine) else emptyList()
+    val rows = dataLines.map { parseRow(it) }
+    
+    if (headerCells.isEmpty() && rows.isEmpty()) return
+    
+    val maxCols = maxOf(headerCells.size, rows.maxOfOrNull { it.size } ?: 0)
+    if (maxCols == 0) return
+    
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        colors = CardDefaults.cardColors(containerColor = Color.Transparent),
+        shape = RoundedCornerShape(8.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFE2E8F0))
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            // 表头
+            if (headerCells.isNotEmpty()) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Color(0xFFEFF6FF))
+                        .padding(horizontal = 8.dp, vertical = 6.dp)
+                ) {
+                    headerCells.forEach { cell ->
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .padding(horizontal = 4.dp)
+                        ) {
+                            Text(
+                                text = cell,
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = Color(0xFF1E3A5F)
+                            )
+                        }
+                    }
+                    // 补齐空列
+                    repeat(maxCols - headerCells.size) {
+                        Box(modifier = Modifier.weight(1f))
+                    }
+                }
+                Divider(color = Color(0xFFE2E8F0), thickness = 1.dp)
+            }
+            
+            // 数据行
+            rows.forEachIndexed { rowIndex, rowCells ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(if (rowIndex % 2 == 0) Color.White else Color(0xFFFAFAFA))
+                        .padding(horizontal = 8.dp, vertical = 6.dp)
+                ) {
+                    rowCells.forEach { cell ->
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .padding(horizontal = 4.dp)
+                        ) {
+                            InlineMarkdownAndroid(cell)
+                        }
+                    }
+                    // 补齐空列
+                    repeat(maxCols - rowCells.size) {
+                        Box(modifier = Modifier.weight(1f))
+                    }
+                }
+                if (rowIndex < rows.size - 1) {
+                    Divider(color = Color(0xFFF0F0F0), thickness = 0.5.dp)
+                }
+            }
+        }
+    }
+}
+
+// ==================== 任务列表项 ====================
+
+/**
+ * 任务列表项组件
+ */
+@Composable
+fun TaskListItemAndroid(content: String, isChecked: Boolean, onToggle: (() -> Unit)? = null) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 16.dp, bottom = 4.dp)
+            .then(if (onToggle != null) Modifier.clickable { onToggle() } else Modifier),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        // Checkbox
+        Box(
+            modifier = Modifier
+                .size(18.dp)
+                .background(
+                    if (isChecked) Color(0xFF4CAF50) else Color.Transparent,
+                    RoundedCornerShape(3.dp)
+                )
+                .border(
+                    1.5.dp,
+                    if (isChecked) Color(0xFF4CAF50) else Color(0xFF9E9E9E),
+                    RoundedCornerShape(3.dp)
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            if (isChecked) {
+                Text(
+                    text = "✓",
+                    color = Color.White,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+        Spacer(modifier = Modifier.width(8.dp))
+        // 内容
+        val textContent = content.trim()
+        if (isChecked) {
+            Text(
+                text = textContent,
+                style = MaterialTheme.typography.bodySmall,
+                color = Color(0xFF9E9E9E),
+                textDecoration = androidx.compose.ui.text.style.TextDecoration.LineThrough
+            )
+        } else {
+            InlineMarkdownAndroid(textContent)
+        }
+    }
+}
+
+/**
+ * Markdown 内容渲染 - Android 端 (备用实现)
+ * 
+ * 注意: 主要渲染已改用 MarkdownWebView (WebView + KaTeX)，能正确显示数学公式
+ * 此函数保留作为备用，使用简单的 Unicode 符号替换方式处理 LaTeX
+ * 
+ * 支持表格、数学公式、代码高亮、任务列表、链接
  */
 @Composable
 fun MarkdownContentAndroid(content: String) {
+    val context = LocalContext.current
     val lines = content.split("\n")
     var inCodeBlock = false
     var codeBlockContent = StringBuilder()
     var codeLanguage = ""
+    var inTable = false
+    var tableLines = mutableListOf<String>()
+    var inMathBlock = false
+    var mathBlockContent = StringBuilder()
     
     Column(
         modifier = Modifier.fillMaxWidth()
     ) {
         lines.forEachIndexed { index, line ->
             when {
+                // 数学公式块 $$...$$ 或 \[...\]
+                (line.trim().startsWith("$$") || line.trim().startsWith("\\[")) && !inCodeBlock -> {
+                    if (inMathBlock) {
+                        // 结束数学块
+                        if (mathBlockContent.isNotEmpty()) {
+                            MathFormulaAndroid(mathBlockContent.toString().trim(), isBlock = true)
+                            mathBlockContent = StringBuilder()
+                        }
+                        inMathBlock = false
+                    } else {
+                        val trimmedLine = line.trim()
+                        val isDollar = trimmedLine.startsWith("$$")
+                        val endMarker = if (isDollar) "$$" else "\\]"
+                        val startMarker = if (isDollar) "$$" else "\\["
+                        
+                        // 检查是否是单行公式 $$...$$ 或 \[...\]
+                        if (trimmedLine.endsWith(endMarker) && trimmedLine.length > startMarker.length + endMarker.length) {
+                            // 单行公式
+                            val content = trimmedLine.removePrefix(startMarker).removeSuffix(endMarker).trim()
+                            MathFormulaAndroid(content, isBlock = true)
+                        } else {
+                            // 多行公式开始
+                            inMathBlock = true
+                            // 如果当前行有内容（不是纯粹的起始标记），加入内容
+                            val firstContent = trimmedLine.removePrefix(startMarker).trim()
+                            if (firstContent.isNotEmpty()) {
+                                mathBlockContent.append(firstContent).append("\n")
+                            }
+                        }
+                    }
+                }
+                // 结束标记 \] 或 $$（当在数学块中）
+                inMathBlock && (line.trim() == "$$" || line.trim() == "\\]") -> {
+                    // 结束数学块
+                    if (mathBlockContent.isNotEmpty()) {
+                        MathFormulaAndroid(mathBlockContent.toString().trim(), isBlock = true)
+                        mathBlockContent = StringBuilder()
+                    }
+                    inMathBlock = false
+                }
+                inMathBlock -> {
+                    mathBlockContent.append(line).append("\n")
+                }
                 // 代码块开始/结束
                 line.trim().startsWith("```") -> {
                     if (inCodeBlock) {
@@ -1887,6 +2493,59 @@ fun MarkdownContentAndroid(content: String) {
                 // 代码块内容
                 inCodeBlock -> {
                     codeBlockContent.append(line).append("\n")
+                }
+                // 表格检测
+                line.trim().startsWith("|") && line.trim().endsWith("|") -> {
+                    if (!inTable) {
+                        inTable = true
+                        tableLines = mutableListOf()
+                    }
+                    tableLines.add(line)
+                }
+                // 表格结束
+                inTable && !line.trim().startsWith("|") -> {
+                    if (tableLines.isNotEmpty()) {
+                        MarkdownTableAndroid(tableLines)
+                        tableLines = mutableListOf()
+                    }
+                    inTable = false
+                    // 继续处理当前行
+                    when {
+                        line.startsWith("### ") -> {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = line.removePrefix("### "),
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = Color(0xFF4A4038)
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                        }
+                        line.startsWith("## ") -> {
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Text(
+                                text = line.removePrefix("## "),
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF4A4038)
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                        }
+                        line.startsWith("# ") -> {
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Text(
+                                text = line.removePrefix("# "),
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFFC9A86C)
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                        }
+                        line.isNotBlank() -> {
+                            InlineMarkdownAndroid(line, context)
+                            Spacer(modifier = Modifier.height(4.dp))
+                        }
+                    }
                 }
                 // 标题
                 line.startsWith("### ") -> {
@@ -1919,6 +2578,17 @@ fun MarkdownContentAndroid(content: String) {
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                 }
+                // 任务列表 - [ ] 或 [x]
+                line.trim().let { l ->
+                    l.startsWith("- [ ] ") || l.startsWith("- [x] ") || 
+                    l.startsWith("* [ ] ") || l.startsWith("* [x] ")
+                } -> {
+                    val isChecked = line.trim().contains("[x]")
+                    val content = line.trim()
+                        .removePrefix("- [ ] ").removePrefix("- [x] ")
+                        .removePrefix("* [ ] ").removePrefix("* [x] ")
+                    TaskListItemAndroid(content, isChecked)
+                }
                 // 无序列表
                 line.trim().startsWith("- ") || line.trim().startsWith("* ") -> {
                     val content = line.trim().removePrefix("- ").removePrefix("* ")
@@ -1934,7 +2604,7 @@ fun MarkdownContentAndroid(content: String) {
                             color = Color(0xFFC9A86C),
                             modifier = Modifier.padding(end = 8.dp)
                         )
-                        InlineMarkdownAndroid(content)
+                        InlineMarkdownAndroid(content, context)
                     }
                 }
                 // 有序列表
@@ -1955,7 +2625,7 @@ fun MarkdownContentAndroid(content: String) {
                                 color = Color(0xFFC9A86C),
                                 modifier = Modifier.padding(end = 8.dp)
                             )
-                            InlineMarkdownAndroid(listContent)
+                            InlineMarkdownAndroid(listContent, context)
                         }
                     }
                 }
@@ -1988,13 +2658,13 @@ fun MarkdownContentAndroid(content: String) {
                                     .background(Color(0xFF7BA8C9))
                             )
                             Spacer(modifier = Modifier.width(12.dp))
-                            InlineMarkdownAndroid(quoteContent)
+                            InlineMarkdownAndroid(quoteContent, context)
                         }
                     }
                 }
                 // 普通文本
                 line.isNotBlank() -> {
-                    InlineMarkdownAndroid(line)
+                    InlineMarkdownAndroid(line, context)
                     Spacer(modifier = Modifier.height(4.dp))
                 }
                 // 空行
@@ -2005,40 +2675,74 @@ fun MarkdownContentAndroid(content: String) {
                 }
             }
         }
+        
+        // 处理末尾的表格
+        if (inTable && tableLines.isNotEmpty()) {
+            MarkdownTableAndroid(tableLines)
+        }
     }
 }
 
 /**
- * 代码块组件
+ * 代码块组件 - 带语法高亮
  */
 @Composable
 fun CodeBlockAndroid(code: String, language: String) {
+    val highlightedCode = remember(code, language) { highlightCode(code, language) }
+    
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 4.dp),
         colors = CardDefaults.cardColors(
-            containerColor = Color(0xFF2D2D2D)
+            containerColor = Color(0xFF1E1E1E)
         ),
         shape = RoundedCornerShape(8.dp)
     ) {
-        Column(modifier = Modifier.padding(12.dp)) {
+        Column(modifier = Modifier.fillMaxWidth()) {
             // 语言标签
             if (language.isNotEmpty()) {
-                Text(
-                    text = language,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Color(0xFF888888),
-                    modifier = Modifier.padding(bottom = 8.dp)
-                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Color(0xFF2D2D2D))
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = language,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color(0xFF888888),
+                        fontWeight = FontWeight.Medium
+                    )
+                    Spacer(modifier = Modifier.weight(1f))
+                    // 复制按钮
+                    val context = LocalContext.current
+                    androidx.compose.material3.IconButton(
+                        onClick = {
+                            val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                            val clip = android.content.ClipData.newPlainText("code", code)
+                            clipboard.setPrimaryClip(clip)
+                        },
+                        modifier = Modifier.size(24.dp)
+                    ) {
+                        androidx.compose.material3.Icon(
+                            imageVector = androidx.compose.material.icons.Icons.Default.ContentCopy,
+                            contentDescription = "复制代码",
+                            tint = Color(0xFF888888),
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
             }
             // 代码内容
             SelectionContainer {
                 Text(
-                    text = code,
+                    text = highlightedCode,
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color(0xFFE0E0E0),
-                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                    modifier = Modifier.padding(12.dp),
+                    color = Color(0xFFE0E0E0)
                 )
             }
         }
@@ -2046,15 +2750,91 @@ fun CodeBlockAndroid(code: String, language: String) {
 }
 
 /**
- * 行内 Markdown 渲染
+ * 行内 Markdown 渲染 - 支持链接点击和行内公式
  */
 @Composable
-fun InlineMarkdownAndroid(text: String) {
-    // 简化的行内渲染
+fun InlineMarkdownAndroid(text: String, context: Context? = null) {
+    val localContext = context ?: LocalContext.current
+    
+    // 处理行内数学公式
+    val processedText = remember(text) { extractInlineMath(text) }
+    
     val annotatedText = buildAnnotatedString {
-        var remaining = text
+        var remaining = processedText.first
+        val mathSegments = processedText.second
+        var offset = 0
         
         while (remaining.isNotEmpty()) {
+            // 检查当前位置是否有数学公式
+            val mathAtPos = mathSegments.find { it.first == offset }
+            if (mathAtPos != null) {
+                // 渲染数学公式
+                withStyle(androidx.compose.ui.text.SpanStyle(
+                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                    background = Color(0xFFF5F5F5)
+                )) {
+                    append(mathAtPos.second)
+                }
+                offset += mathAtPos.second.length
+                remaining = if (remaining.length > mathAtPos.second.length) remaining.substring(mathAtPos.second.length) else ""
+                continue
+            }
+            
+            // 处理链接 [text](url)
+            val linkStart = remaining.indexOf("[")
+            if (linkStart >= 0) {
+                val linkEnd = remaining.indexOf("]", linkStart)
+                if (linkEnd > linkStart) {
+                    val urlStart = remaining.indexOf("(", linkEnd)
+                    val urlEnd = remaining.indexOf(")", urlStart)
+                    if (urlStart == linkEnd + 1 && urlEnd > urlStart) {
+                        // 添加前面的普通文本
+                        if (linkStart > 0) {
+                            append(remaining.substring(0, linkStart))
+                        }
+                        
+                        val linkText = remaining.substring(linkStart + 1, linkEnd)
+                        val url = remaining.substring(urlStart + 1, urlEnd)
+                        
+                        // 添加可点击的链接
+                        pushStringAnnotation(tag = "URL", annotation = url)
+                        withStyle(androidx.compose.ui.text.SpanStyle(
+                            color = Color(0xFF1565C0),
+                            textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline
+                        )) {
+                            append(linkText)
+                        }
+                        pop()
+                        
+                        remaining = remaining.substring(urlEnd + 1)
+                        continue
+                    }
+                }
+            }
+            
+            // 处理自动链接 URL
+            val urlPattern = Regex("""(https?://[^\s<>\[\]()]+)""")
+            val urlMatch = urlPattern.find(remaining)
+            if (urlMatch != null) {
+                val matchStart = urlMatch.range.first
+                if (matchStart > 0) {
+                    append(remaining.substring(0, matchStart))
+                }
+                
+                val url = urlMatch.value
+                pushStringAnnotation(tag = "URL", annotation = url)
+                withStyle(androidx.compose.ui.text.SpanStyle(
+                    color = Color(0xFF1565C0),
+                    textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline
+                )) {
+                    append(url)
+                }
+                pop()
+                
+                remaining = remaining.substring(urlMatch.range.last + 1)
+                continue
+            }
+            
             // 处理粗体 **text**
             val boldStart = remaining.indexOf("**")
             if (boldStart >= 0) {
@@ -2121,10 +2901,26 @@ fun InlineMarkdownAndroid(text: String) {
         }
     }
     
+    // 渲染可点击的文本
     Text(
         text = annotatedText,
         style = MaterialTheme.typography.bodySmall,
-        color = Color(0xFF4A4038)
+        color = Color(0xFF4A4038),
+        modifier = Modifier.clickable(
+            interactionSource = remember { MutableInteractionSource() },
+            indication = null
+        ) {
+            // 点击时检查是否点击了链接
+            val annotations = annotatedText.getStringAnnotations("URL", 0, annotatedText.length)
+            if (annotations.isNotEmpty()) {
+                try {
+                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(annotations.first().item))
+                    localContext.startActivity(intent)
+                } catch (e: Exception) {
+                    // 忽略无法打开的链接
+                }
+            }
+        }
     )
 }
 
@@ -2145,7 +2941,10 @@ fun MessageItem(
     onRecall: (String) -> Unit = {},
     // AI 消息展开状态相关参数
     isAIExpanded: Boolean = true,
-    onAIExpandChange: (String, Boolean) -> Unit = { _, _ -> }
+    onAIExpandChange: (String, Boolean) -> Unit = { _, _ -> },
+    // 复制和转发功能相关参数
+    onCopy: (String) -> Unit = {},
+    onForward: (Message) -> Unit = {}
 ) {
     val isCurrentUser = message.userId == currentUserId
     val isSystemMessage = message.type == MessageType.SYSTEM
@@ -2177,7 +2976,9 @@ fun MessageItem(
             timeString = timeString,
             isTransient = isTransient,
             isExpanded = isAIExpanded,
-            onExpandChange = { newExpanded -> onAIExpandChange(message.id, newExpanded) }
+            onExpandChange = { newExpanded -> onAIExpandChange(message.id, newExpanded) },
+            onCopy = onCopy,
+            onForward = onForward
         )
         return
     }
@@ -3903,4 +4704,67 @@ fun ForwardToContactDialog(
             }
         }
     }
+}
+
+/**
+ * 提取行内数学公式
+ * 支持 $...$ 和 \(...\) 格式
+ * 返回处理后的文本和数学公式的位置列表
+ */
+private fun extractInlineMath(text: String): Pair<String, List<Pair<Int, String>>> {
+    val mathSegments = mutableListOf<Pair<Int, String>>()
+    val result = StringBuilder()
+    var i = 0
+    var offset = 0
+    
+    while (i < text.length) {
+        // 检查是否是 \(...\) 格式的行内公式
+        if (i + 1 < text.length && text[i] == '\\' && text[i + 1] == '(') {
+            val start = i
+            i += 2  // 跳过 \(
+            // 找到结束的 \)
+            while (i + 1 < text.length && !(text[i] == '\\' && text[i + 1] == ')')) {
+                i++
+            }
+            if (i + 1 < text.length) {
+                val formula = text.substring(start + 2, i)
+                val processed = processMathFormula(formula)
+                mathSegments.add(Pair(offset, processed))
+                result.append(processed)
+                offset += processed.length
+                i += 2  // 跳过 \)
+            } else {
+                // 没有结束符，作为普通文本
+                result.append(text.substring(start))
+                offset += text.length - start
+            }
+        }
+        // 检查是否是行内公式 $...$ (不是 $$)
+        else if (text[i] == '$' && (i == 0 || text[i - 1] != '$') && (i + 1 >= text.length || text[i + 1] != '$')) {
+            val start = i
+            i++
+            // 找到结束的 $
+            while (i < text.length && text[i] != '$') {
+                i++
+            }
+            if (i < text.length) {
+                val formula = text.substring(start + 1, i)
+                val processed = processMathFormula(formula)
+                mathSegments.add(Pair(offset, processed))
+                result.append(processed)
+                offset += processed.length
+                i++
+            } else {
+                // 没有结束符，作为普通文本
+                result.append(text.substring(start))
+                offset += text.length - start
+            }
+        } else {
+            result.append(text[i])
+            offset++
+            i++
+        }
+    }
+    
+    return Pair(result.toString(), mathSegments)
 }
