@@ -1,0 +1,12 @@
+{
+  "name": "com.silk.harmony",
+  "version": "1.0.0",
+  "description": "Silk - 智能协作平台鸿蒙原生应用",
+  "main": "",
+  "author": "",
+  "license": "MIT",
+  "dependencies": {},
+  "devDependencies": {
+    "@ohos/hypium": "1.0.6"
+  }
+}

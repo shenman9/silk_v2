@@ -1,0 +1,96 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "Silk - AI-powered collaboration platform"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "Silk main entry"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "Silk"
+    },
+    {
+      "name": "login_title",
+      "value": "Login"
+    },
+    {
+      "name": "register_title",
+      "value": "Register"
+    },
+    {
+      "name": "username",
+      "value": "Username"
+    },
+    {
+      "name": "password",
+      "value": "Password"
+    },
+    {
+      "name": "confirm_password",
+      "value": "Confirm Password"
+    },
+    {
+      "name": "full_name",
+      "value": "Full Name"
+    },
+    {
+      "name": "phone_number",
+      "value": "Phone Number"
+    },
+    {
+      "name": "login_button",
+      "value": "Login"
+    },
+    {
+      "name": "register_button",
+      "value": "Register"
+    },
+    {
+      "name": "no_account",
+      "value": "Don't have an account?"
+    },
+    {
+      "name": "has_account",
+      "value": "Already have an account?"
+    },
+    {
+      "name": "group_list_title",
+      "value": "Groups"
+    },
+    {
+      "name": "create_group",
+      "value": "Create Group"
+    },
+    {
+      "name": "settings_title",
+      "value": "Settings"
+    },
+    {
+      "name": "logout",
+      "value": "Logout"
+    },
+    {
+      "name": "send_message",
+      "value": "Send"
+    },
+    {
+      "name": "input_placeholder",
+      "value": "Type a message..."
+    },
+    {
+      "name": "connecting",
+      "value": "Connecting..."
+    },
+    {
+      "name": "connected",
+      "value": "Connected"
+    },
+    {
+      "name": "disconnected",
+      "value": "Disconnected"
+    }
+  ]
+}

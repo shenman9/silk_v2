@@ -1,0 +1,104 @@
+{
+  "string": [
+    {
+      "name": "EntryAbility_label",
+      "value": "Silk"
+    },
+    {
+      "name": "app_name",
+      "value": "Silk"
+    },
+    {
+      "name": "login",
+      "value": "Login"
+    },
+    {
+      "name": "register",
+      "value": "Register"
+    },
+    {
+      "name": "username",
+      "value": "Username"
+    },
+    {
+      "name": "password",
+      "value": "Password"
+    },
+    {
+      "name": "confirm_password",
+      "value": "Confirm Password"
+    },
+    {
+      "name": "full_name",
+      "value": "Full Name"
+    },
+    {
+      "name": "phone_number",
+      "value": "Phone Number"
+    },
+    {
+      "name": "groups",
+      "value": "Groups"
+    },
+    {
+      "name": "chat",
+      "value": "Chat"
+    },
+    {
+      "name": "settings",
+      "value": "Settings"
+    },
+    {
+      "name": "logout",
+      "value": "Logout"
+    },
+    {
+      "name": "send",
+      "value": "Send"
+    },
+    {
+      "name": "type_message",
+      "value": "Type a message..."
+    },
+    {
+      "name": "connecting",
+      "value": "Connecting..."
+    },
+    {
+      "name": "connected",
+      "value": "Connected"
+    },
+    {
+      "name": "disconnected",
+      "value": "Disconnected"
+    },
+    {
+      "name": "new_group",
+      "value": "New Group"
+    },
+    {
+      "name": "group_name",
+      "value": "Group Name"
+    },
+    {
+      "name": "create",
+      "value": "Create"
+    },
+    {
+      "name": "cancel",
+      "value": "Cancel"
+    },
+    {
+      "name": "about",
+      "value": "About"
+    },
+    {
+      "name": "version",
+      "value": "Version"
+    },
+    {
+      "name": "silk_description",
+      "value": "Intelligent Collaboration Platform"
+    }
+  ]
+}
