@@ -92,6 +92,8 @@ interface BackendGroup {
   createdAt?: string;
   invitationCode?: string;
   hostName?: string;
+  lastMessage?: string;
+  lastMessageTime?: number;
 }
 
 interface BackendCreateGroupRequest {
@@ -108,6 +110,13 @@ interface BackendLeaveGroupRequest {
   userId: string;
 }
 
+interface SendMessageRequestBody {
+  groupId: string;
+  userId: string;
+  userName: string;
+  content: string;
+}
+
 interface UpdateSettingsRequestBody {
   userId: string;
   language: string;
@@ -118,6 +127,11 @@ interface LatestVersionInfo {
   versionName: string;
   versionCode: number;
   downloadUrl: string;
+}
+
+interface UnreadCountsResponse {
+  success: boolean;
+  unreadCounts?: Record<string, number>;
 }
 
 interface ResponseEnvelope {
@@ -329,7 +343,9 @@ export class ApiClient {
       ownerId: group.hostId ? group.hostId : '',
       memberCount: 0,
       createdAt: now,
-      updatedAt: now
+      updatedAt: now,
+      lastMessage: group.lastMessage,
+      lastMessageTime: group.lastMessageTime
     };
   }
 
@@ -375,6 +391,18 @@ export class ApiClient {
   }
 
   /**
+   * 获取用户所有群组未读数
+   */
+  async getUnreadCounts(userId: string): Promise<Record<string, number>> {
+    const response = await this.get<Object>(`/api/unread/${userId}`);
+    const unreadResponse = response as UnreadCountsResponse;
+    if (unreadResponse.success && unreadResponse.unreadCounts) {
+      return unreadResponse.unreadCounts;
+    }
+    return {};
+  }
+
+  /**
    * 创建新群组
    */
   async createGroup(request: CreateGroupRequest): Promise<ApiResponse<Group>> {
@@ -406,6 +434,19 @@ export class ApiClient {
   async leaveGroup(groupId: string, userId: string): Promise<ApiResponse<void>> {
     const payload: BackendLeaveGroupRequest = { userId: userId };
     return this.post<void>(`/groups/${groupId}/leave`, payload);
+  }
+
+  /**
+   * 发送消息到指定群组（用于转发）
+   */
+  async sendMessageToGroup(groupId: string, userId: string, userName: string, content: string): Promise<ApiResponse<void>> {
+    const payload: SendMessageRequestBody = {
+      groupId: groupId,
+      userId: userId,
+      userName: userName,
+      content: content
+    };
+    return this.post<void>('/api/messages/send', payload);
   }
 
   // ==================== 用户设置 API ====================

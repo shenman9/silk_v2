@@ -2,6 +2,8 @@
  * 加载指示器组件
  * 用于显示加载状态
  */
+import { SilkColors } from '../common/Theme';
+
 @Component
 export struct LoadingIndicator {
   @Prop message: string = '加载中...'
@@ -12,18 +14,18 @@ export struct LoadingIndicator {
       LoadingProgress()
         .width(this.indicatorSize)
         .height(this.indicatorSize)
-        .color($r('app.color.primary'))
+        .color(SilkColors.primary)
 
       if (this.message) {
         Text(this.message)
           .fontSize(14)
-          .fontColor($r('app.color.text_secondary'))
+          .fontColor(SilkColors.textSecondary)
           .margin({ top: 16 })
       }
     }
     .width('100%')
     .height('100%')
     .justifyContent(FlexAlign.Center)
-    .backgroundColor($r('app.color.background'))
+    .backgroundColor(SilkColors.background)
   }
 }

@@ -296,8 +296,9 @@ export struct LoginPage {
 
   // 保存登录状态
   private async saveLoginState(user: User): Promise<void> {
-    // 使用 Preferences 保存用户信息
-    // 这里简化处理，实际应用中需要使用持久化存储
+    // 存储到 AppStorage，供 ChatPage 使用
+    AppStorage.setOrCreate<string>('currentUserId', user.id);
+    AppStorage.setOrCreate<string>('currentUserName', user.name);
     console.log('保存用户信息:', user);
   }
 }

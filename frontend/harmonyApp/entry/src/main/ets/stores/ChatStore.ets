@@ -165,7 +165,13 @@ export class ChatStore {
         } else {
           const nextStatusMessages: Message[] = this._statusMessages.concat([message]);
           if (nextStatusMessages.length > 10) {
-            this._statusMessages = nextStatusMessages.slice(nextStatusMessages.length - 10);
+            // 取最后 10 条消息
+            const startIndex = nextStatusMessages.length - 10;
+            const result: Message[] = [];
+            for (let i = startIndex; i < nextStatusMessages.length; i++) {
+              result.push(nextStatusMessages[i]);
+            }
+            this._statusMessages = result;
           } else {
             this._statusMessages = nextStatusMessages;
           }

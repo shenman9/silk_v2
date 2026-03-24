@@ -29,8 +29,24 @@ export struct GroupListPage {
   async loadGroups(): Promise<void> {
     this.isLoading = true;
     try {
-      const response = await this.apiClient.getGroups(this.appStore.currentUser!.id);
-      this.groups = response.data ? response.data : [];
+      const user = this.appStore.currentUser;
+      if (!user) {
+        this.groups = [];
+        return;
+      }
+
+      const response = await this.apiClient.getGroups(user.id);
+      const unreadCounts = await this.apiClient.getUnreadCounts(user.id);
+
+      const sourceGroups: Group[] = response.data ? response.data : [];
+      const nextGroups: Group[] = [];
+      for (let i = 0; i < sourceGroups.length; i++) {
+        const group = sourceGroups[i];
+        const count = unreadCounts[group.id];
+        group.unreadCount = count ? count : 0;
+        nextGroups.push(group);
+      }
+      this.groups = nextGroups;
     } catch (error) {
       this.errorMessage = '加载群组失败';
     } finally {
@@ -59,7 +75,14 @@ export struct GroupListPage {
   }
 
   enterChat(group: Group): void {
-    this.appStore.setCurrentGroup(group);
+    // 使用 AppStorage 传递数据，避免单例复制问题
+    AppStorage.setOrCreate<string>('currentGroupId', group.id);
+    AppStorage.setOrCreate<string>('currentGroupName', group.name);
+    const user = this.appStore.currentUser;
+    if (user) {
+      AppStorage.setOrCreate<string>('currentUserId', user.id);
+      AppStorage.setOrCreate<string>('currentUserName', user.name);
+    }
     appRouter.goToChat(group.id, group.name);
   }
 
