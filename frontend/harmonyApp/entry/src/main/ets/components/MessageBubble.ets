@@ -11,8 +11,13 @@ export struct MessageBubble {
   @Prop message: Message;
   @Prop isOwn: boolean = false;
   @Prop currentUserId: string = '';
+  @Prop actionsEnabled: boolean = true;
   onCopy?: (content: string) => void;
   onForward?: (message: Message) => void;
+  onShare?: (message: Message) => void;
+  onOpenActions?: (message: Message) => void;
+  @Prop messageStatus: string = 'sent';
+  onRetry?: (message: Message) => void;
   @State private isAIExpanded: boolean = false;
 
   build() {
@@ -50,7 +55,24 @@ export struct MessageBubble {
   }
 
   private canShowAIActions(): boolean {
-    return !this.message.isTransient;
+    return this.actionsEnabled && !this.message.isTransient;
+  }
+
+  private canShowNormalActions(): boolean {
+    return this.actionsEnabled && this.message.type === MessageType.TEXT && !this.message.isTransient;
+  }
+
+  @Builder
+  private buildQuickAction(label: string, onTap: () => void) {
+    Row() {
+      Text(label)
+        .fontSize(11)
+        .fontColor(Theme.colors.textLight)
+    }
+    .padding({ left: 8, right: 8, top: 4, bottom: 4 })
+    .backgroundColor('#14000000')
+    .borderRadius(10)
+    .onClick(() => onTap())
   }
 
   @Builder
@@ -132,17 +154,17 @@ export struct MessageBubble {
             Blank().width(8)
 
             Row() {
-              Text('↗')
-                .fontSize(14)
+              Text('⋯')
+                .fontSize(15)
               Blank().width(4)
-              Text('转发')
+              Text('更多')
                 .fontSize(12)
                 .fontColor(Theme.colors.textSecondary)
             }
             .padding({ left: 8, right: 8, top: 4, bottom: 4 })
             .onClick(() => {
-              if (this.onForward) {
-                this.onForward(this.message);
+              if (this.onOpenActions) {
+                this.onOpenActions(this.message);
               }
             })
           }
@@ -222,6 +244,55 @@ export struct MessageBubble {
       }
       .width('100%')
       .justifyContent(this.isOwn ? FlexAlign.End : FlexAlign.Start)
+
+      if (this.isOwn) {
+        Row() {
+          if (this.messageStatus === 'sending') {
+            Text('发送中...')
+              .fontSize(11)
+              .fontColor(Theme.colors.textLight)
+          } else if (this.messageStatus === 'failed') {
+            Text('发送失败')
+              .fontSize(11)
+              .fontColor('#D9534F')
+            Text(' · 重试')
+              .fontSize(11)
+              .fontColor(Theme.colors.primary)
+              .onClick(() => {
+                if (this.onRetry) {
+                  this.onRetry(this.message);
+                }
+              })
+          } else {
+            Text(this.formatTime(this.message.timestamp))
+              .fontSize(11)
+              .fontColor(Theme.colors.textLight)
+          }
+        }
+        .width('100%')
+        .justifyContent(FlexAlign.End)
+        .margin({ top: 4, right: 4 })
+      }
+
+      if (this.canShowNormalActions() && this.messageStatus !== 'sending') {
+        Row() {
+          Blank()
+          this.buildQuickAction('复制', () => {
+            if (this.onCopy) {
+              this.onCopy(this.message.content ? this.message.content : '');
+            }
+          })
+          Blank().width(6)
+          this.buildQuickAction('更多', () => {
+            if (this.onOpenActions) {
+              this.onOpenActions(this.message);
+            }
+          })
+        }
+        .width('100%')
+        .justifyContent(FlexAlign.End)
+        .margin({ top: 2, right: 4 })
+      }
     }
     .width('100%')
     .padding({ left: 12, right: 12, top: 4, bottom: 4 })

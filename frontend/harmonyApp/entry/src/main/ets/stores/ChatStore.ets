@@ -117,10 +117,10 @@ export class ChatStore {
   /**
    * 发送消息
    */
-  sendMessage(content: string): void {
+  sendMessage(content: string): Message | null {
     if (!this.wsClient || this._connectionState !== ConnectionState.CONNECTED) {
       this.onError?.('未连接到服务器');
-      return;
+      return null;
     }
 
     const message: Message = {
@@ -140,7 +140,23 @@ export class ChatStore {
     this.onMessagesChanged?.();
 
     // 发送到服务器
-    this.wsClient.send(message);
+    const sent = this.wsClient.send(message);
+    if (!sent) {
+      this.onError?.('消息发送失败');
+      return null;
+    }
+    return message;
+  }
+
+  /**
+   * 重试发送已存在的消息
+   */
+  retryMessage(message: Message): boolean {
+    if (!this.wsClient || this._connectionState !== ConnectionState.CONNECTED) {
+      this.onError?.('未连接到服务器');
+      return false;
+    }
+    return this.wsClient.send(message);
   }
 
   /**
