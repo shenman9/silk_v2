@@ -1,0 +1,11 @@
+{
+  "app": {
+    "bundleName": "com.silk.harmony",
+    "bundleType": "app",
+    "icon": "$media:app_icon",
+    "label": "$string:app_name",
+    "versionCode": 1000000,
+    "versionName": "1.0.0",
+    "minCompatibleVersionCode": 1000000
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "string": [
+    { "name": "module_desc", "value": "Silk 即时通讯" },
+    { "name": "EntryAbility_desc", "value": "Silk 聊天应用" },
+    { "name": "EntryAbility_label", "value": "Silk" }
+  ]
+}

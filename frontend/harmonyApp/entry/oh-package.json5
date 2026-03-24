@@ -1,0 +1,9 @@
+{
+  "name": "entry",
+  "version": "1.0.0",
+  "description": "Silk IM entry module",
+  "main": "",
+  "author": "Silk Team",
+  "license": "ISC",
+  "dependencies": {}
+}

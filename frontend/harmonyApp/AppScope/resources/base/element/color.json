@@ -1,0 +1,16 @@
+{
+  "color": [
+    { "name": "silk_primary", "value": "#C9A86C" },
+    { "name": "silk_primary_dark", "value": "#A8894D" },
+    { "name": "silk_background", "value": "#FDF8F0" },
+    { "name": "silk_surface", "value": "#FFFFFF" },
+    { "name": "silk_text_primary", "value": "#4A4038" },
+    { "name": "silk_text_secondary", "value": "#8A7B6A" },
+    { "name": "silk_success", "value": "#7DAE6C" },
+    { "name": "silk_error", "value": "#D97B7B" },
+    { "name": "silk_divider", "value": "#E8E0D4" },
+    { "name": "silk_bubble_self", "value": "#C9A86C" },
+    { "name": "silk_bubble_other", "value": "#F5F0E8" },
+    { "name": "silk_system_message", "value": "#B0A89C" }
+  ]
+}
