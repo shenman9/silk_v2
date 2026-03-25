@@ -124,6 +124,20 @@ class ChatServer(
     }
     
     suspend fun join(userId: String, userName: String, session: WebSocketSession) {
+        // 权限校验：群聊仅允许群成员加入（否则会导致历史/工具上下文越权）
+        if (sessionName.startsWith("group_") && userId != SilkAgent.AGENT_ID) {
+            val groupId = sessionName.removePrefix("group_")
+            if (!GroupRepository.isUserInGroup(groupId, userId)) {
+                session.close(
+                    CloseReason(
+                        CloseReason.Codes.VIOLATED_POLICY,
+                        "Not authorized for this group"
+                    )
+                )
+                return
+            }
+        }
+
         connections[userId] = session
         
         // 如果是第一个真实用户加入，让 Silk AI 也加入（静默模式）
@@ -520,13 +534,31 @@ class ChatServer(
             val memberList = members.map { it.userId to it.userName }
             directModelAgent.setGroupMembersList(memberList)
         }
+
+        // 根据“群聊作用域 / 私聊跨群作用域”计算用户可访问的 sessionId 列表
+        val accessibleSessionIds: List<String> = if (sessionName.startsWith("group_") && userId.isNotBlank()) {
+            val groupId = sessionName.removePrefix("group_")
+            val isSilkPrivateChat = getGroupDisplayName(sessionName)?.startsWith("[Silk]") == true
+            if (isSilkPrivateChat) {
+                // 私聊：用户自己的所有群（包括专属 [Silk] 对话群本身）
+                GroupRepository.getUserGroups(userId).map { "group_${it.id}" }.distinct()
+            } else {
+                // 普通群聊：只允许访问当前群
+                if (GroupRepository.isUserInGroup(groupId, userId)) listOf(sessionName) else emptyList()
+            }
+        } else {
+            // 非 group session 或 userId 缺失：默认仅允许当前 session
+            listOf(sessionName)
+        }
         
         // 使用 DirectModelAgent 直接调用模型
         var fullResponse = ""
         try {
             val response = directModelAgent.processInput(
                 userInput = userMessage,
-                systemPrompt = systemPrompt
+                systemPrompt = systemPrompt,
+                requestUserId = userId,
+                accessibleSessionIds = accessibleSessionIds
             ) { stepType, content, isComplete ->
                 when (stepType) {
                     "thinking" -> {
