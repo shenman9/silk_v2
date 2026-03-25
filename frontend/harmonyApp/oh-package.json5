@@ -1,5 +1,5 @@
 {
-  "modelVersion": "5.0.0",
+  "modelVersion": "6.0.2",
   "name": "silk-harmony",
   "version": "1.0.0",
   "description": "Silk IM HarmonyOS Client",
@@ -7,8 +7,5 @@
   "author": "Silk Team",
   "license": "ISC",
   "dependencies": {},
-  "devDependencies": {
-    "@ohos/hvigor-ohos-plugin": "4.0.2",
-    "@ohos/hvigor": "4.0.2"
-  }
+  "devDependencies": {}
 }
