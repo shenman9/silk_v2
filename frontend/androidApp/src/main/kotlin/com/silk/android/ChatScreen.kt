@@ -1019,8 +1019,25 @@ fun ChatScreen(appState: AppState) {
                             // AI 消息展开状态（默认收起，只有长内容才需要展开/收起功能）
                             isAIExpanded = aiMessageExpandedStates[message.id] ?: false,
                             onAIExpandChange = { messageId, isExpanded ->
-                                // 只切换展开状态，不做任何列表滚动，避免视图跳动
                                 aiMessageExpandedStates[messageId] = isExpanded
+                                if (!isExpanded) {
+                                    val idx = messages.reversed().indexOfFirst { it.id == messageId }
+                                    if (idx >= 0) {
+                                        scopeForScroll.launch {
+                                            kotlinx.coroutines.delay(80)
+                                            listState.scrollToItem(idx)
+                                        }
+                                    }
+                                }
+                            },
+                            onLongContentCollapsed = { messageId ->
+                                val idx = messages.reversed().indexOfFirst { it.id == messageId }
+                                if (idx >= 0) {
+                                    scopeForScroll.launch {
+                                        kotlinx.coroutines.delay(80)
+                                        listState.scrollToItem(idx)
+                                    }
+                                }
                             },
                             // 复制功能
                             onCopy = { content ->
@@ -1591,16 +1608,12 @@ fun ChatScreen(appState: AppState) {
             onForward = { targetGroup ->
                 scope.launch {
                     forwardResult = null
-                    val selectedContent = messagesToForward
-                        .joinToString("\n\n") { msg ->
-                            val time = SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).apply {
-                                timeZone = java.util.TimeZone.getTimeZone("Asia/Shanghai")
-                            }.format(java.util.Date(msg.timestamp))
-                            "[$time] ${msg.userName}: ${msg.content}"
+                    val forwardMessage =
+                        if (messageToForward != null) {
+                            buildForwardPayloadForSingle(group.name, messageToForward!!)
+                        } else {
+                            buildForwardPayloadForBatch(group.name, messagesToForward)
                         }
-                    
-                    // 发送转发消息到目标群组
-                    val forwardMessage = "📨 转发自【${group.name}】:\n\n$selectedContent"
                     val success = ApiClient.sendMessageToGroup(
                         groupId = targetGroup.id,
                         userId = user.id,
@@ -1637,10 +1650,12 @@ fun ChatScreen(appState: AppState) {
     
     // ==================== 转发到联系人对话框 ====================
     if (showForwardToContactDialog) {
+        val messagesToForwardContact =
+            messages.filter { selectedMessages.contains(it.id) }.sortedBy { it.timestamp }
         ForwardToContactDialog(
             contacts = contacts,
             isLoading = isLoadingContacts,
-            selectedMessages = messages.filter { selectedMessages.contains(it.id) }.sortedBy { it.timestamp },
+            selectedMessages = messagesToForwardContact,
             currentUser = user,
             onForward = { contact ->
                 scope.launch {
@@ -1649,17 +1664,8 @@ fun ChatScreen(appState: AppState) {
                     // 先获取或创建与联系人的私聊
                     val chatResponse = ApiClient.startPrivateChat(user.id, contact.contactId)
                     if (chatResponse.success && chatResponse.group != null) {
-                        val selectedContent = messages
-                            .filter { selectedMessages.contains(it.id) }
-                            .sortedBy { it.timestamp }
-                            .joinToString("\n\n") { msg ->
-                                val time = SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).apply {
-                                    timeZone = java.util.TimeZone.getTimeZone("Asia/Shanghai")
-                                }.format(java.util.Date(msg.timestamp))
-                                "[$time] ${msg.userName}: ${msg.content}"
-                            }
-                        
-                        val forwardMessage = "📨 转发自【${group.name}】:\n\n$selectedContent"
+                        val forwardMessage =
+                            buildForwardPayloadForBatch(group.name, messagesToForwardContact)
                         val success = ApiClient.sendMessageToGroup(
                             groupId = chatResponse.group!!.id,
                             userId = user.id,
@@ -1716,6 +1722,9 @@ fun AIMessageCardAndroid(
 ) {
     val isLongContent = message.content.length > 500
     val effectiveExpanded = if (isTransient) true else isExpanded
+    val aiPreview =
+        if (message.content.length > 220) message.content.take(220) + "..."
+        else message.content
     
     // 调试日志
     LaunchedEffect(message.id, isExpanded) {
@@ -1805,27 +1814,72 @@ fun AIMessageCardAndroid(
             
             Spacer(modifier = Modifier.height(12.dp))
             
-            // 内容区域
-            if (effectiveExpanded || !isLongContent) {
-                if (isLongContent && effectiveExpanded && !isTransient) {
-                    // 长内容展开时改为卡片内滚动，避免整条消息高度突变导致列表跳动
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = 360.dp)
-                            .verticalScroll(rememberScrollState())
-                    ) {
-                        MarkdownWebView(message.content)
-                    }
-                } else {
+            // 内容区域（与 Harmony：长文折叠时底部「查看全文」，展开后底部「收起」）
+            when {
+                !isLongContent || isTransient -> {
                     MarkdownWebView(message.content)
                 }
-            } else {
-                Text(
-                    text = "${message.content.take(200)}...",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                !effectiveExpanded -> {
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            text = aiPreview,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 8,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 10.dp)
+                                .clickable { onExpandChange(true) }
+                                .padding(vertical = 6.dp),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                "查看全文",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = SilkColors.primary
+                            )
+                            Text("  ▼", fontSize = 12.sp, color = SilkColors.primary)
+                        }
+                    }
+                }
+                else -> {
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 360.dp)
+                                .verticalScroll(rememberScrollState())
+                        ) {
+                            MarkdownWebView(message.content)
+                        }
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 10.dp)
+                                .clickable { onExpandChange(false) }
+                                .padding(vertical = 4.dp),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                "收起",
+                                fontSize = 12.sp,
+                                color = SilkColors.textSecondary
+                            )
+                            Text(
+                                "  ▲",
+                                fontSize = 11.sp,
+                                color = SilkColors.textSecondary
+                            )
+                        }
+                    }
+                }
             }
             
             // 底部操作栏
@@ -2924,6 +2978,179 @@ fun InlineMarkdownAndroid(text: String, context: Context? = null) {
     )
 }
 
+@Composable
+private fun ForwardedMessageBubble(
+    parts: ForwardedMessageParts,
+    isOwn: Boolean,
+    isExpanded: Boolean,
+    onExpand: () -> Unit,
+    onCollapse: () -> Unit,
+) {
+    val batchItems = remember(parts.body, parts.isBatch) {
+        if (parts.isBatch) parseBatchForwardMarkdownBody(parts.body) else emptyList()
+    }
+    val useBatchLayout = batchItems.isNotEmpty()
+
+    fun previewSource(): String =
+        if (parts.isBatch && batchItems.isNotEmpty()) batchItems.first().content
+        else parts.body
+
+    fun bodyPreviewText(rawBody: String): String {
+        val b = rawBody.replace("\r", "").trim()
+        if (b.isEmpty()) return "（无正文）"
+        val firstLine = b.lineSequence().firstOrNull { it.isNotBlank() } ?: b
+        val line = firstLine.ifEmpty { b }
+        val maxLen = 96
+        return if (line.length <= maxLen) line else line.take(maxLen) + "…"
+    }
+
+    val bg = if (isOwn) Color(0xFFEDE4D4) else Color(0xFFFAF7F2)
+    val shape = RoundedCornerShape(
+        topStart = 12.dp,
+        topEnd = 12.dp,
+        bottomStart = if (isOwn) 12.dp else 4.dp,
+        bottomEnd = if (isOwn) 4.dp else 12.dp,
+    )
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(IntrinsicSize.Min)
+    ) {
+        Box(
+            modifier = Modifier
+                .width(3.dp)
+                .fillMaxHeight()
+                .background(SilkColors.primary)
+        )
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .background(bg, shape)
+                .padding(12.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("📨", fontSize = 14.sp)
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    if (parts.isBatch) "批量转发" else "转发",
+                    fontSize = 12.sp,
+                    color = Color(0xFF7A6B5A),
+                )
+                Text(
+                    " · 来自",
+                    fontSize = 12.sp,
+                    color = SilkColors.textLight,
+                    modifier = Modifier.padding(horizontal = 4.dp)
+                )
+                Text(
+                    parts.sourceName.ifEmpty { "未命名会话" },
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = SilkColors.primary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+
+            if (parts.senderName.isNotEmpty()) {
+                Text(
+                    parts.senderName,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = SilkColors.primary,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp, bottom = 2.dp, start = 4.dp)
+                )
+            }
+
+            if (!isExpanded) {
+                Column(Modifier.fillMaxWidth().padding(top = 10.dp)) {
+                    Text(
+                        text = bodyPreviewText(previewSource()),
+                        fontSize = 13.sp,
+                        color = SilkColors.textSecondary,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        lineHeight = 20.sp,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 10.dp)
+                            .clickable(onClick = onExpand)
+                            .padding(vertical = 6.dp),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "查看转发全文",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = SilkColors.primary
+                        )
+                        Text("  ▼", fontSize = 12.sp, color = SilkColors.primary)
+                    }
+                }
+            } else {
+                if (useBatchLayout) {
+                    batchItems.forEachIndexed { index, item ->
+                        if (index > 0) {
+                            Spacer(Modifier.height(14.dp))
+                            Divider(color = Color(0xFFE0D8CC), thickness = 1.dp)
+                            Spacer(Modifier.height(2.dp))
+                        }
+                        Text(
+                            item.senderName.ifEmpty { "用户" },
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = SilkColors.primary,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(
+                                    top = if (index == 0) 10.dp else 14.dp,
+                                    bottom = 6.dp,
+                                    start = 4.dp
+                                )
+                        )
+                        MarkdownWebView(item.content)
+                    }
+                } else {
+                    Divider(
+                        color = Color(0xFFE0D8CC),
+                        thickness = 1.dp,
+                        modifier = Modifier.padding(top = 10.dp, bottom = 10.dp)
+                    )
+                    MarkdownWebView(parts.body)
+                }
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 10.dp)
+                        .clickable(onClick = onCollapse)
+                        .padding(vertical = 4.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("收起", fontSize = 12.sp, color = SilkColors.textSecondary)
+                    Text("  ▲", fontSize = 11.sp, color = SilkColors.textSecondary)
+                }
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun MessageItem(
@@ -2942,6 +3169,8 @@ fun MessageItem(
     // AI 消息展开状态相关参数
     isAIExpanded: Boolean = true,
     onAIExpandChange: (String, Boolean) -> Unit = { _, _ -> },
+    /** 长文本/转发全文收起后由列表滚回该条，与 Harmony onLongContentCollapsed 一致 */
+    onLongContentCollapsed: (String) -> Unit = {},
     // 复制和转发功能相关参数
     onCopy: (String) -> Unit = {},
     onForward: (Message) -> Unit = {}
@@ -3129,6 +3358,8 @@ fun MessageItem(
         }
     } else {
         // 普通消息
+        val forwardedParts = remember(message.content) { parseForwardedMessageContent(message.content) }
+        var isForwardExpanded by remember(message.id) { mutableStateOf(false) }
         Column(
             modifier = Modifier.fillMaxWidth(),
             horizontalAlignment = if (isCurrentUser) Alignment.End else Alignment.Start
@@ -3190,7 +3421,9 @@ fun MessageItem(
                                 TextButton(
                                     onClick = {
                                         showContextMenu = false
-                                        try { onLongPress(message.id) } catch (_: Exception) { }
+                                        try {
+                                            onForward(message)
+                                        } catch (_: Exception) { }
                                     },
                                     modifier = Modifier.fillMaxWidth()
                                 ) { Text("↗ 转发", color = MaterialTheme.colorScheme.onSurface) }
@@ -3285,10 +3518,13 @@ fun MessageItem(
                             Modifier.weight(1f, fill = false)
                         }
                     ) {
+                val useForwardedBubble = forwardedParts != null && !isPdfMessage
                 // ✅ 根据消息类别设置背景色和透明度
                 Surface(
                     color = when {
+                        isSelected && useForwardedBubble -> Color.Transparent
                         isSelected -> Color(0xFF81D4FA)  // 选中时：明亮的浅蓝色
+                        useForwardedBubble -> Color.Transparent
                         // ✅ 根据category设置背景
                         message.category == com.silk.shared.models.MessageCategory.FINAL_REPORT -> {
                             // 最终报告：正常颜色，高亮
@@ -3313,7 +3549,7 @@ fun MessageItem(
                     tonalElevation = if (isTransient) 0.5.dp else 1.dp  // ✅ 统一阴影
                 ) {
                     Column(
-                        modifier = Modifier.padding(12.dp)
+                        modifier = Modifier.padding(if (useForwardedBubble) 0.dp else 12.dp)
                     ) {
                         if (isPdfMessage) {
                         // PDF下载消息特殊处理
@@ -3380,6 +3616,17 @@ fun MessageItem(
                                 )
                             }
                         }
+                    } else if (forwardedParts != null) {
+                        ForwardedMessageBubble(
+                            parts = forwardedParts,
+                            isOwn = isCurrentUser,
+                            isExpanded = isForwardExpanded,
+                            onExpand = { isForwardExpanded = true },
+                            onCollapse = {
+                                isForwardExpanded = false
+                                onLongContentCollapsed(message.id)
+                            },
+                        )
                     } else {
                         // 普通文本消息
                         // ✅ 统一使用bodySmall（增大一号，不再缩小），根据category设置不同亮度
