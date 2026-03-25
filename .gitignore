@@ -98,3 +98,6 @@ frontend/harmonyApp/AppScope/
 frontend/harmonyApp/hvigor/
 frontend/harmonyApp/oh-package-lock.json5
 frontend/harmonyApp/oh_modules/
+
+# Agent / IDE session artifacts (not source)
+tmp/

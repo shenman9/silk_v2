@@ -54,6 +54,23 @@ const MARKDOWN_CSS: string = `
 `;
 
 /**
+ * 检测是否包含复杂公式，适合使用 KaTeX 增强渲染。
+ */
+export function contentNeedsMathWebRender(content: string): boolean {
+  const source = content ? content : '';
+  if (source.indexOf('$$') >= 0 || source.indexOf('\\[') >= 0 || source.indexOf('\\(') >= 0) {
+    return true;
+  }
+  const keywords: string[] = ['\\frac', '\\sqrt', '\\sum', '\\int', '\\prod', '\\left', '\\right'];
+  for (let i = 0; i < keywords.length; i++) {
+    if (source.indexOf(keywords[i]) >= 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
  * 将字符串编码为 JavaScript 字符串字面量
  */
 function encodeToJsString(s: string): string {
@@ -104,25 +121,29 @@ function generateMarkdownHtml(content: string): string {
     </style>
 </head>
 <body>
-    <div id="content" class="markdown-body"></div>
+    <div id="fallback" class="markdown-body"></div>
+    <div id="content" class="markdown-body" style="display:none"></div>
     <script>
     (function() {
         var hljsReady = typeof hljs !== 'undefined';
-        
-        function renderContent() {
+        var retries = 0;
+        var maxRetries = 15;
+        var rawContent = ${jsContent};
+        var fallbackEl = document.getElementById('fallback');
+        var contentEl = document.getElementById('content');
+
+        function renderFallback() {
+            fallbackEl.textContent = rawContent;
+            fallbackEl.style.display = 'block';
+            contentEl.style.display = 'none';
+        }
+
+        function renderByMarkedOnly() {
+            if (typeof marked === 'undefined') {
+              return false;
+            }
             try {
-                if (typeof marked === 'undefined') { setTimeout(renderContent, 50); return; }
-                if (typeof renderMathInElement === 'undefined') { setTimeout(renderContent, 50); return; }
-                if (!hljsReady && typeof hljs !== 'undefined') { hljsReady = true; }
-                if (!hljsReady && renderContent.waitCount < 10) {
-                    renderContent.waitCount = (renderContent.waitCount || 0) + 1;
-                    setTimeout(renderContent, 50);
-                    return;
-                }
-                
                 marked.setOptions({ breaks: true, gfm: true });
-                
-                var rawContent = ${jsContent};
                 var mathBlocks = [];
                 var mathInlines = [];
                 var idx = 0;
@@ -147,46 +168,66 @@ function generateMarkdownHtml(content: string): string {
                     return ' MATHINLINE' + (idx++) + 'END ';
                 });
                 
-                var html = marked.parse(rawContent);
+                var parsed = marked.parse(rawContent);
                 
-                html = html.replace(/MATHBLOCK(\\d+)END/g, function(m, i) {
+                parsed = parsed.replace(/MATHBLOCK(\\d+)END/g, function(m, i) {
                     return '<div class="math-block">$$' + mathBlocks[i] + '$$</div>';
                 });
                 
-                html = html.replace(/MATHINLINE(\\d+)END/g, function(m, i) {
+                parsed = parsed.replace(/MATHINLINE(\\d+)END/g, function(m, i) {
                     return '$' + mathInlines[i] + '$';
                 });
-                
-                document.getElementById('content').innerHTML = html;
+                contentEl.innerHTML = parsed;
                 
                 if (typeof hljs !== 'undefined') {
-                    document.querySelectorAll('pre code').forEach(function(block) {
+                    contentEl.querySelectorAll('pre code').forEach(function(block) {
                         try { hljs.highlightElement(block); } catch(e) {}
                     });
                 }
+
+                if (typeof renderMathInElement !== 'undefined') {
+                  renderMathInElement(contentEl, {
+                      throwOnError: false,
+                      strict: 'ignore',
+                      ignoredTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code', 'option'],
+                      delimiters: [
+                          {left: '$$', right: '$$', display: true},
+                          {left: '\\\\[', right: '\\\\]', display: true},
+                          {left: '$', right: '$', display: false},
+                          {left: '\\\\(', right: '\\\\)', display: false}
+                      ]
+                  });
+                }
                 
-                renderMathInElement(document.getElementById('content'), {
-                    throwOnError: false,
-                    strict: 'ignore',
-                    ignoredTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code', 'option'],
-                    delimiters: [
-                        {left: '$$', right: '$$', display: true},
-                        {left: '\\\\[', right: '\\\\]', display: true},
-                        {left: '$', right: '$', display: false},
-                        {left: '\\\\(', right: '\\\\)', display: false}
-                    ]
-                });
-                
-                document.querySelectorAll('a').forEach(function(link) {
+                contentEl.querySelectorAll('a').forEach(function(link) {
                     link.setAttribute('target', '_blank');
                     link.setAttribute('rel', 'noopener noreferrer');
                 });
-                
+
+                fallbackEl.style.display = 'none';
+                contentEl.style.display = 'block';
+                return true;
             } catch(e) {
-                console.error('Render error:', e);
-                document.getElementById('content').textContent = 'Error: ' + e.message;
+                return false;
             }
         }
+
+        function renderContent() {
+          if (renderByMarkedOnly()) {
+            return;
+          }
+          retries += 1;
+          if (retries >= maxRetries) {
+            renderFallback();
+            return;
+          }
+          if (!hljsReady && typeof hljs !== 'undefined') {
+            hljsReady = true;
+          }
+          setTimeout(renderContent, 120);
+        }
+
+        renderFallback();
         renderContent();
     })();
     </script>

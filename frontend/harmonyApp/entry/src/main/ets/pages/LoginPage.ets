@@ -3,6 +3,9 @@ import { appStore } from '../stores/AppStore';
 import { SilkColors } from '../common/Theme';
 import { User } from '../models/User';
 import { router as appRouter } from '../common/Router';
+import promptAction from '@ohos.promptAction';
+import dataPreferences from '@ohos.data.preferences';
+import common from '@ohos.app.ability.common';
 
 /**
  * 登录页面
@@ -18,8 +21,15 @@ export struct LoginPage {
   @State phoneNumber: string = '';
   @State isLoading: boolean = false;
   @State errorMessage: string = '';
+  private static readonly QUICK_LOGIN_STORE: string = 'silk_quick_login';
+  private static readonly QUICK_LOGIN_USER_KEY: string = 'quickLoginUserName';
+  private static readonly QUICK_LOGIN_PASS_KEY: string = 'quickLoginPassword';
 
   private readonly apiClient = globalApiClient;
+
+  aboutToAppear(): void {
+    this.prefillQuickLoginUserName();
+  }
 
   build() {
     Column() {
@@ -72,7 +82,7 @@ export struct LoginPage {
   LoginForm() {
     Column() {
       // 用户名输入
-      TextInput({ placeholder: '用户名' })
+      TextInput({ placeholder: '用户名', text: $$this.username })
         .width('100%')
         .height(50)
         .backgroundColor(SilkColors.surface)
@@ -85,7 +95,7 @@ export struct LoginPage {
         })
 
       // 密码输入
-      TextInput({ placeholder: '密码' })
+      TextInput({ placeholder: '密码', text: $$this.password })
         .width('100%')
         .height(50)
         .type(InputType.Password)
@@ -122,6 +132,37 @@ export struct LoginPage {
         .onClick(() => {
           this.handleLogin();
         })
+
+      Row() {
+        Button('保存为一键登录')
+          .layoutWeight(1)
+          .height(42)
+          .backgroundColor(SilkColors.surfaceVariant)
+          .borderRadius(8)
+          .fontColor(SilkColors.textPrimary)
+          .fontSize(14)
+          .enabled(!this.isLoading && this.username.length > 0 && this.password.length > 0)
+          .opacity((!this.isLoading && this.username.length > 0 && this.password.length > 0) ? 1 : 0.5)
+          .onClick(() => {
+            this.saveQuickLoginCredentials();
+          })
+
+        Button('一键登录')
+          .layoutWeight(1)
+          .height(42)
+          .backgroundColor('#D7C3A0')
+          .borderRadius(8)
+          .fontColor(SilkColors.textPrimary)
+          .fontSize(14)
+          .margin({ left: 8 })
+          .enabled(!this.isLoading)
+          .opacity(!this.isLoading ? 1 : 0.5)
+          .onClick(() => {
+            this.handleQuickLogin();
+          })
+      }
+      .width('100%')
+      .margin({ top: 12 })
     }
     .width('100%')
     .padding({ left: 16, right: 16 })
@@ -264,6 +305,82 @@ export struct LoginPage {
     }
   }
 
+  private async handleLoginWithCredentials(username: string, password: string): Promise<void> {
+    this.username = username;
+    this.password = password;
+    await this.handleLogin();
+  }
+
+  /**
+   * 进入登录页时预填已保存的用户名（密码仍只存在 preferences，需点「一键登录」或手动输入）
+   */
+  private async prefillQuickLoginUserName(): Promise<void> {
+    try {
+      const context = getContext(this) as common.UIAbilityContext;
+      const pref = await dataPreferences.getPreferences(context, LoginPage.QUICK_LOGIN_STORE);
+      const prefUser = await pref.get(LoginPage.QUICK_LOGIN_USER_KEY, '');
+      const u = `${prefUser}`.trim();
+      if (u.length > 0 && this.username.trim().length === 0) {
+        this.username = u;
+      }
+    } catch (error) {
+      console.error('预填一键登录用户名失败:', error);
+    }
+  }
+
+  private async saveQuickLoginCredentials(): Promise<void> {
+    if (this.username.trim().length === 0 || this.password.length === 0) {
+      this.showToast('请先输入用户名和密码');
+      return;
+    }
+    try {
+      const context = getContext(this) as common.UIAbilityContext;
+      const pref = await dataPreferences.getPreferences(context, LoginPage.QUICK_LOGIN_STORE);
+      await pref.put(LoginPage.QUICK_LOGIN_USER_KEY, this.username.trim());
+      await pref.put(LoginPage.QUICK_LOGIN_PASS_KEY, this.password);
+      await pref.flush();
+      // 兼容旧流程：同时写入 AppStorage（仅会话内）
+      AppStorage.setOrCreate<string>(LoginPage.QUICK_LOGIN_USER_KEY, this.username.trim());
+      AppStorage.setOrCreate<string>(LoginPage.QUICK_LOGIN_PASS_KEY, this.password);
+      this.showToast('已保存一键登录凭据');
+    } catch (error) {
+      console.error('保存一键登录失败:', error);
+      this.showToast('保存失败，请重试');
+    }
+  }
+
+  private async handleQuickLogin(): Promise<void> {
+    let username = '';
+    let password = '';
+    try {
+      const context = getContext(this) as common.UIAbilityContext;
+      const pref = await dataPreferences.getPreferences(context, LoginPage.QUICK_LOGIN_STORE);
+      const prefUser = await pref.get(LoginPage.QUICK_LOGIN_USER_KEY, '');
+      const prefPass = await pref.get(LoginPage.QUICK_LOGIN_PASS_KEY, '');
+      username = `${prefUser}`.trim();
+      password = `${prefPass}`;
+    } catch (error) {
+      console.error('读取一键登录失败:', error);
+    }
+
+    // 兼容迁移：若持久化尚无数据，尝试读取旧的 AppStorage 一次性迁移
+    if (username.length === 0 || password.length === 0) {
+      const localUser = AppStorage.get<string>(LoginPage.QUICK_LOGIN_USER_KEY);
+      const localPass = AppStorage.get<string>(LoginPage.QUICK_LOGIN_PASS_KEY);
+      username = localUser ? localUser.trim() : '';
+      password = localPass ? localPass : '';
+      if (username.length > 0 && password.length > 0) {
+        await this.saveQuickLoginCredentials();
+      }
+    }
+
+    if (username.length === 0 || password.length === 0) {
+      this.showToast('请先手动登录并点击“保存为一键登录”');
+      return;
+    }
+    await this.handleLoginWithCredentials(username, password);
+  }
+
   // 处理注册
   private async handleRegister(): Promise<void> {
     this.isLoading = true;
@@ -300,5 +417,16 @@ export struct LoginPage {
     AppStorage.setOrCreate<string>('currentUserId', user.id);
     AppStorage.setOrCreate<string>('currentUserName', user.name);
     console.log('保存用户信息:', user);
+  }
+
+  private showToast(message: string): void {
+    try {
+      promptAction.showToast({
+        message: message,
+        duration: 1200
+      });
+    } catch (error) {
+      console.error('Toast failed:', error);
+    }
   }
 }

@@ -117,6 +117,12 @@ interface SendMessageRequestBody {
   content: string;
 }
 
+interface RecallMessageRequestBody {
+  groupId: string;
+  messageId: string;
+  userId: string;
+}
+
 interface UpdateSettingsRequestBody {
   userId: string;
   language: string;
@@ -447,6 +453,18 @@ export class ApiClient {
       content: content
     };
     return this.post<void>('/api/messages/send', payload);
+  }
+
+  /**
+   * 撤回消息（与 Android /api/messages/recall 对齐）
+   */
+  async recallMessage(groupId: string, messageId: string, userId: string): Promise<ApiResponse<void>> {
+    const payload: RecallMessageRequestBody = {
+      groupId: groupId,
+      messageId: messageId,
+      userId: userId
+    };
+    return this.post<void>('/api/messages/recall', payload);
   }
 
   // ==================== 用户设置 API ====================

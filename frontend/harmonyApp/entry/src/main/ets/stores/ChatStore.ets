@@ -170,6 +170,10 @@ export class ChatStore {
       if (message.type === MessageType.RECALL) {
         const idsToRemove = message.content.split(',').map(id => id.trim());
         this._messages = this._messages.filter(msg => !idsToRemove.includes(msg.id));
+        const transient = this._transientMessage;
+        if (transient && idsToRemove.includes(transient.id)) {
+          this._transientMessage = null;
+        }
         this.onMessagesChanged?.();
         return;
       }

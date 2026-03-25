@@ -5,6 +5,7 @@
  */
 import { Message, MessageType, MessageCategory } from '../models/Message';
 import { Theme, SilkColors } from '../common/Theme';
+import { MarkdownLite } from './MarkdownLite';
 
 @Component
 export struct MessageBubble {
@@ -117,11 +118,18 @@ export struct MessageBubble {
 
         Blank().height(10)
 
-        Text(this.isAIExpanded || !this.isLongAIContent() ? this.getSafeAIContent() : this.getAIPreview())
-          .fontSize(14)
-          .fontColor(Theme.colors.textPrimary)
-          .maxLines(this.isAIExpanded || !this.isLongAIContent() ? 999 : 8)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
+        if (this.isAIExpanded || !this.isLongAIContent()) {
+          // 稳定优先：临时统一走纯 ArkUI，避免 WebView 公式路径出现空白
+          MarkdownLite({
+            content: this.getSafeAIContent()
+          })
+        } else {
+          Text(this.getAIPreview())
+            .fontSize(14)
+            .fontColor(Theme.colors.textPrimary)
+            .maxLines(8)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+        }
 
         if (this.canShowAIActions()) {
           Blank().height(10)
