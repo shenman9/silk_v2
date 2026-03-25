@@ -1,39 +1,34 @@
 ---
-description: After editing frontend/harmonyApp, run Sync + Build App + Run entry via CLI so the user can verify immediately
+description: After editing frontend/harmonyApp, sync + build + hdc install + start without asking; user expects fresh HAP on device every time
 globs: frontend/harmonyApp/**
 alwaysApply: false
 ---
 
-# Harmony：改完代码后必须跑「DevEco 三步」
+# Harmony：改完代码后默认跑通「编译 + 安装」
 
-只要本轮对话里**修改了** `frontend/harmonyApp/` 下源码、资源或配置，在**结束本轮前**必须在仓库内执行下面三条（顺序固定），并把结果当作本轮自检；**不要**只改不跑、让用户自己去点 Studio。
+只要本轮对话里**修改了** `frontend/harmonyApp/` 下源码、资源或配置，在**结束本轮前**须在仓库内跑完下面流程，**不要**问用户「要不要 install」——默认**都要**（与用户对齐的习惯）。
 
 ## 环境
 
-- 先设置：`export DEVECO_SDK_HOME=/Applications/DevEco-Studio.app/Contents/sdk`
+- `export DEVECO_SDK_HOME=/Applications/DevEco-Studio.app/Contents/sdk`
 - 工作目录：`frontend/harmonyApp`
 
-## 三步（对应 Studio：Sync and Refresh → Build App → Run entry）
+## 推荐一键顺序（与当前工程产物一致）
 
-1. **Sync and Refresh Project**  
-   ```bash
-   /Applications/DevEco-Studio.app/Contents/tools/node/bin/node /Applications/DevEco-Studio.app/Contents/tools/hvigor/bin/hvigorw.js --sync -p product=default
-   ```
+1. **依赖（按需，有变更时）**  
+   `"/Applications/DevEco-Studio.app/Contents/tools/ohpm/bin/ohpm" install`
 
-2. **Build App**  
-   ```bash
-   /Applications/DevEco-Studio.app/Contents/tools/node/bin/node /Applications/DevEco-Studio.app/Contents/tools/hvigor/bin/hvigorw.js assembleApp -p product=default
-   ```
+2. **Sync**  
+   `"/Applications/DevEco-Studio.app/Contents/tools/hvigor/bin/hvigorw" --sync -p product=default --analyze=normal --parallel --incremental --daemon`
 
-3. **Run `entry`（安装并拉起 Ability）**  
-   ```bash
-   HDC=/Applications/DevEco-Studio.app/Contents/sdk/default/openharmony/toolchains/hdc
-   HAP="$PWD/entry/build/default/outputs/default/app/entry-default.hap"
-   $HDC install -r "$HAP"
-   $HDC shell aa start -a EntryAbility -b com.silk.harmony
-   ```
-   （第 3 步在 `frontend/harmonyApp` 下执行，使 `$PWD` 正确；若 HAP 路径因工程配置变化，以实际 `outputs` 下生成的 `entry-default.hap` 为准。）
+3. **编 entry HAP**（当前产出为 unsigned）  
+   `"/Applications/DevEco-Studio.app/Contents/tools/hvigor/bin/hvigorw" assembleHap --mode module -p module=entry@default -p product=default --analyze=normal --parallel --incremental --daemon`
 
-   **禁止**在日常迭代里加 `hdc uninstall`：`uninstall` 会清空应用沙箱数据，**一键登录等 `preferences` 持久化会全部丢失**。仅在需要「净机重装」时再手动执行 uninstall。
+4. **安装并拉起**（在装包前可先 `hdc list targets`；多设备时用 `-t <序列号>`，常见模拟器为 `127.0.0.1:5555`）  
+   - HAP：`frontend/harmonyApp/entry/build/default/outputs/default/entry-default-unsigned.hap`  
+   - `hdc -t <target> install -r "<上述绝对路径>"`  
+   - `hdc -t <target> shell aa start -a EntryAbility -b com.silk.harmony`
 
-若某一步失败，在本轮内_retry 或修到通过为止，不要把失败摊给用户。
+若某一步失败，在本轮内 retry 或修到通过为止。
+
+**禁止**在日常迭代里加 `hdc uninstall`（会清空沙箱与用户偏好）。仅在需要净机重装时再手动 uninstall。

@@ -6,6 +6,12 @@
 import { Message, MessageType, MessageCategory } from '../models/Message';
 import { Theme, SilkColors } from '../common/Theme';
 import { MarkdownLite } from './MarkdownLite';
+import {
+  parseForwardedMessageContent,
+  ForwardedMessageParts,
+  parseBatchForwardMarkdownBody,
+  BatchForwardItem
+} from '../common/ForwardedMessageParse';
 
 @Component
 export struct MessageBubble {
@@ -19,7 +25,16 @@ export struct MessageBubble {
   onOpenActions?: (message: Message) => void;
   @Prop messageStatus: string = 'sent';
   onRetry?: (message: Message) => void;
+  /** 长文本/转发全文从展开收起到折叠后，由列表滚回本条，避免高度突变导致视口跑偏 */
+  onLongContentCollapsed?: () => void;
   @State private isAIExpanded: boolean = false;
+  @State private isForwardExpanded: boolean = false;
+
+  private notifyLongContentCollapsed(): void {
+    if (this.onLongContentCollapsed) {
+      this.onLongContentCollapsed();
+    }
+  }
 
   build() {
     Column() {
@@ -63,6 +78,189 @@ export struct MessageBubble {
     return this.actionsEnabled && this.message.type === MessageType.TEXT && !this.message.isTransient;
   }
 
+  private isForwardedContent(): boolean {
+    return parseForwardedMessageContent(this.message.content ? this.message.content : '') !== null;
+  }
+
+  private forwardedParts(): ForwardedMessageParts | null {
+    return parseForwardedMessageContent(this.message.content ? this.message.content : '');
+  }
+
+  private forwardBodyPreviewText(rawBody: string): string {
+    const b = rawBody ? rawBody.replace(/\r/g, '').trim() : '';
+    if (b.length === 0) {
+      return '（无正文）';
+    }
+    const singleLine = b.split('\n')[0];
+    const line = singleLine.length > 0 ? singleLine : b;
+    const maxLen = 96;
+    if (line.length <= maxLen) {
+      return line;
+    }
+    return `${line.substring(0, maxLen)}…`;
+  }
+
+  /** 折叠预览用的正文：批量已拆分时不带 ### 标题行 */
+  private forwardPreviewSource(): string {
+    const fp = this.forwardedParts();
+    if (!fp) {
+      return '';
+    }
+    if (fp.isBatch) {
+      const items = parseBatchForwardMarkdownBody(fp.body);
+      if (items.length > 0) {
+        return items[0].content;
+      }
+    }
+    return fp.body;
+  }
+
+  private getBatchForwardItems(): BatchForwardItem[] {
+    const fp = this.forwardedParts();
+    if (!fp || !fp.isBatch) {
+      return [];
+    }
+    return parseBatchForwardMarkdownBody(fp.body);
+  }
+
+  private useBatchItemLayout(): boolean {
+    return this.getBatchForwardItems().length > 0;
+  }
+
+  @Builder
+  private buildForwardedBubbleBody() {
+    Column() {
+      Row() {
+        Text('📨')
+          .fontSize(14)
+          .margin({ right: 6 })
+        Text(this.forwardedParts()!.isBatch ? '批量转发' : '转发')
+          .fontSize(12)
+          .fontColor('#7A6B5A')
+        Text(' · 来自')
+          .fontSize(12)
+          .fontColor(Theme.colors.textLight)
+          .margin({ left: 4, right: 4 })
+        Text(this.forwardedParts()!.sourceName.length > 0 ? this.forwardedParts()!.sourceName : '未命名会话')
+          .fontSize(12)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(SilkColors.primary)
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .layoutWeight(1)
+      }
+      .width('100%')
+      .alignItems(VerticalAlign.Center)
+
+      if (this.forwardedParts()!.senderName.length > 0) {
+        Row() {
+          Text(this.forwardedParts()!.senderName)
+            .fontSize(12)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(SilkColors.primary)
+            .maxLines(2)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+        }
+        .width('100%')
+        .margin({ top: 8, bottom: 2, left: 4 })
+      }
+
+      if (!this.isForwardExpanded) {
+        Column() {
+          Text(this.forwardBodyPreviewText(this.forwardPreviewSource()))
+            .fontSize(13)
+            .fontColor(Theme.colors.textSecondary)
+            .maxLines(2)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .lineHeight(20)
+            .width('100%')
+
+          Row() {
+            Text('查看转发全文')
+              .fontSize(13)
+              .fontColor(SilkColors.primary)
+              .fontWeight(FontWeight.Medium)
+            Text('  ▼')
+              .fontSize(12)
+              .fontColor(SilkColors.primary)
+          }
+          .margin({ top: 10 })
+          .width('100%')
+          .justifyContent(FlexAlign.Center)
+          .padding({ top: 6, bottom: 6 })
+          .onClick(() => {
+            this.isForwardExpanded = true;
+          })
+        }
+        .width('100%')
+        .margin({ top: 10 })
+      } else {
+        if (this.useBatchItemLayout()) {
+          ForEach(this.getBatchForwardItems(), (item: BatchForwardItem, index?: number) => {
+            Column() {
+              Text(item.senderName.length > 0 ? item.senderName : '用户')
+                .fontSize(12)
+                .fontWeight(FontWeight.Medium)
+                .fontColor(SilkColors.primary)
+                .width('100%')
+                .maxLines(2)
+                .textOverflow({ overflow: TextOverflow.Ellipsis })
+                .margin({
+                  top: (index !== undefined && index === 0) ? 10 : 14,
+                  bottom: 6,
+                  left: 4
+                })
+              MarkdownLite({
+                content: item.content
+              })
+              if (index !== undefined && index < this.getBatchForwardItems().length - 1) {
+                Row()
+                  .width('100%')
+                  .height(1)
+                  .backgroundColor('#E0D8CC')
+                  .margin({ top: 14, bottom: 2 })
+              }
+            }
+            .width('100%')
+            .alignItems(HorizontalAlign.Start)
+          }, (item: BatchForwardItem, index?: number) => {
+            const idx = index !== undefined ? index : 0;
+            return `bf_${idx}_${item.senderName}_${item.content.length}`;
+          })
+        } else {
+          Row()
+            .width('100%')
+            .height(1)
+            .backgroundColor('#E0D8CC')
+            .margin({ top: this.forwardedParts()!.senderName.length > 0 ? 10 : 10, bottom: 10 })
+
+          MarkdownLite({
+            content: this.forwardedParts()!.body
+          })
+        }
+
+        Row() {
+          Text('收起')
+            .fontSize(12)
+            .fontColor(SilkColors.textSecondary)
+          Text('  ▲')
+            .fontSize(11)
+            .fontColor(SilkColors.textSecondary)
+        }
+        .width('100%')
+        .justifyContent(FlexAlign.Center)
+        .margin({ top: 10 })
+        .padding({ top: 4, bottom: 4 })
+        .onClick(() => {
+          this.isForwardExpanded = false;
+          this.notifyLongContentCollapsed();
+        })
+      }
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Start)
+  }
+
   @Builder
   private buildQuickAction(label: string, onTap: () => void) {
     Row() {
@@ -103,7 +301,11 @@ export struct MessageBubble {
               .backgroundColor(this.isAIExpanded ? Color.Transparent : '#1AC9A86C')
               .borderRadius(4)
               .onClick(() => {
+                const wasExpanded = this.isAIExpanded;
                 this.isAIExpanded = !this.isAIExpanded;
+                if (wasExpanded) {
+                  this.notifyLongContentCollapsed();
+                }
               })
           }
         }
@@ -118,17 +320,60 @@ export struct MessageBubble {
 
         Blank().height(10)
 
-        if (this.isAIExpanded || !this.isLongAIContent()) {
-          // 稳定优先：临时统一走纯 ArkUI，避免 WebView 公式路径出现空白
+        if (!this.isLongAIContent()) {
           MarkdownLite({
             content: this.getSafeAIContent()
           })
+        } else if (!this.isAIExpanded) {
+          Column() {
+            Text(this.getAIPreview())
+              .fontSize(14)
+              .fontColor(Theme.colors.textPrimary)
+              .maxLines(8)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+              .width('100%')
+
+            Row() {
+              Text('查看全文')
+                .fontSize(13)
+                .fontColor(SilkColors.primary)
+                .fontWeight(FontWeight.Medium)
+              Text('  ▼')
+                .fontSize(12)
+                .fontColor(SilkColors.primary)
+            }
+            .margin({ top: 10 })
+            .width('100%')
+            .justifyContent(FlexAlign.Center)
+            .padding({ top: 6, bottom: 6 })
+            .onClick(() => {
+              this.isAIExpanded = true;
+            })
+          }
+          .width('100%')
         } else {
-          Text(this.getAIPreview())
-            .fontSize(14)
-            .fontColor(Theme.colors.textPrimary)
-            .maxLines(8)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
+          Column() {
+            MarkdownLite({
+              content: this.getSafeAIContent()
+            })
+            Row() {
+              Text('收起')
+                .fontSize(12)
+                .fontColor(SilkColors.textSecondary)
+              Text('  ▲')
+                .fontSize(11)
+                .fontColor(SilkColors.textSecondary)
+            }
+            .width('100%')
+            .justifyContent(FlexAlign.Center)
+            .margin({ top: 10 })
+            .padding({ top: 4, bottom: 4 })
+            .onClick(() => {
+              this.isAIExpanded = false;
+              this.notifyLongContentCollapsed();
+            })
+          }
+          .width('100%')
         }
 
         if (this.canShowAIActions()) {
@@ -232,23 +477,42 @@ export struct MessageBubble {
         .margin({ bottom: 4, left: 4 })
       }
 
-      // 消息内容
+      // 消息内容（转发：卡片式标题 + Markdown 正文）
       Row() {
-        Column() {
-          Text(this.message.content ? this.message.content : '')
-            .fontSize(14)
-            .fontColor(this.getMessageTextColor())
-            .maxLines(100)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
+        if (this.isForwardedContent()) {
+          Column() {
+            this.buildForwardedBubbleBody()
+          }
+          .width('100%')
+          .padding({ left: 12, right: 12, top: 12, bottom: 12 })
+          .borderRadius({
+            topLeft: 12,
+            topRight: 12,
+            bottomLeft: this.isOwn ? 12 : 4,
+            bottomRight: this.isOwn ? 4 : 12
+          })
+          .border({
+            width: { left: 3 },
+            color: SilkColors.primary
+          })
+          .backgroundColor(this.getForwardedBubbleBackground())
+        } else {
+          Column() {
+            Text(this.message.content ? this.message.content : '')
+              .fontSize(14)
+              .fontColor(this.getMessageTextColor())
+              .maxLines(100)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+          }
+          .padding(12)
+          .borderRadius({
+            topLeft: 12,
+            topRight: 12,
+            bottomLeft: this.isOwn ? 12 : 4,
+            bottomRight: this.isOwn ? 4 : 12
+          })
+          .backgroundColor(this.getMessageBackground())
         }
-        .padding(12)
-        .borderRadius({
-          topLeft: 12,
-          topRight: 12,
-          bottomLeft: this.isOwn ? 12 : 4,
-          bottomRight: this.isOwn ? 4 : 12
-        })
-        .backgroundColor(this.getMessageBackground())
       }
       .width('100%')
       .justifyContent(this.isOwn ? FlexAlign.End : FlexAlign.Start)
@@ -305,6 +569,13 @@ export struct MessageBubble {
     .width('100%')
     .padding({ left: 12, right: 12, top: 4, bottom: 4 })
     .alignItems(this.isOwn ? HorizontalAlign.End : HorizontalAlign.Start)
+  }
+
+  private getForwardedBubbleBackground(): ResourceColor {
+    if (this.isOwn) {
+      return '#EDE4D4';
+    }
+    return '#FAF7F2';
   }
 
   private getMessageBackground(): ResourceColor {

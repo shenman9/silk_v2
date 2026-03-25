@@ -8,6 +8,7 @@ import { MessageBubble } from '../components';
 import { chatStore as globalChatStore, ConnectionState } from '../stores/ChatStore';
 import { appStore as globalAppStore } from '../stores/AppStore';
 import { SilkColors } from '../common/Theme';
+import { parseForwardedMessageContent, ForwardedMessageParts } from '../common/ForwardedMessageParse';
 import { router as appRouter } from '../common/Router';
 import { apiClient as globalApiClient } from '../api/ApiClient';
 import pasteboard from '@ohos.pasteboard';
@@ -148,6 +149,23 @@ export struct ChatPage {
       }
       const lastIndex = this.messages.length - 1;
       this.listScroller.scrollToIndex(lastIndex, false, ScrollAlign.END);
+    }, 80);
+  }
+
+  /** 长内容收起后高度变小，把列表锚定到该条，避免视口漂到别条或列表底部 */
+  private scrollListToMessageId(messageId: string): void {
+    let idx = -1;
+    for (let i = 0; i < this.messages.length; i++) {
+      if (this.messages[i].id === messageId) {
+        idx = i;
+        break;
+      }
+    }
+    if (idx < 0) {
+      return;
+    }
+    setTimeout((): void => {
+      this.listScroller.scrollToIndex(idx, false, ScrollAlign.START);
     }, 80);
   }
 
@@ -353,7 +371,8 @@ export struct ChatPage {
   private handleForward(message: Message): void {
     this.bottomSheetMode = 'forward';
     const content = message.content ? message.content : '';
-    const payload = this.sanitizeForInput(`📨 转发自【${this.groupName}】:\n\n${content}`);
+    const sender = message.userName && message.userName.trim().length > 0 ? message.userName.trim() : '未知用户';
+    const payload = this.sanitizeForInput(`📨 转发自【${this.groupName}】:\n👤 ${sender}\n\n${content}`);
     this.forwardingContent = payload;
     this.forwardingError = '';
     this.isLoadingForwardTargets = true;
@@ -405,23 +424,29 @@ export struct ChatPage {
     return result;
   }
 
+  /** 多条合并为 Markdown：每条以三级标题展示发送者，正文单独一段（与 MarkdownLite 一致）。 */
+  private mergeSelectedMessagesMarkdown(selected: Message[]): string {
+    let merged = '';
+    for (let i = 0; i < selected.length; i++) {
+      const item = selected[i];
+      const rawName = item.userName ? item.userName : '用户';
+      const safeName = rawName.replace(/[\r\n]+/g, ' ').trim();
+      const content = item.content ? item.content : '';
+      if (merged !== '') {
+        merged += '\n\n';
+      }
+      merged += `### ${safeName}\n\n${content}`;
+    }
+    return merged;
+  }
+
   private handleBatchCopy(): void {
     const selected = this.getSelectedMessages();
     if (selected.length === 0) {
       this.showToast('请先选择消息');
       return;
     }
-    let merged = '';
-    for (let i = 0; i < selected.length; i++) {
-      const item = selected[i];
-      const name = item.userName ? item.userName : '用户';
-      const content = item.content ? item.content : '';
-      if (merged !== '') {
-        merged += '\n\n';
-      }
-      merged += `${name}: ${content}`;
-    }
-    this.handleCopy(merged);
+    this.handleCopy(this.mergeSelectedMessagesMarkdown(selected));
   }
 
   private handleBatchForward(): void {
@@ -430,18 +455,13 @@ export struct ChatPage {
       this.showToast('请先选择消息');
       return;
     }
-    let merged = '';
-    for (let i = 0; i < selected.length; i++) {
-      const item = selected[i];
-      const name = item.userName ? item.userName : '用户';
-      const content = item.content ? item.content : '';
-      if (merged !== '') {
-        merged += '\n\n';
-      }
-      merged += `${name}: ${content}`;
-    }
+    const merged = this.mergeSelectedMessagesMarkdown(selected);
     this.bottomSheetMode = 'forward';
-    this.forwardingContent = this.sanitizeForInput(`📨 批量转发自【${this.groupName}】:\n\n${merged}`);
+    const batchHint =
+      selected.length === 1 && selected[0].userName && selected[0].userName.trim().length > 0
+        ? selected[0].userName.trim()
+        : `共 ${selected.length} 条`;
+    this.forwardingContent = this.sanitizeForInput(`📨 批量转发自【${this.groupName}】:\n👤 ${batchHint}\n\n${merged}`);
     this.forwardingError = '';
     this.isLoadingForwardTargets = true;
     this.forwardTargets = [];
@@ -694,7 +714,8 @@ export struct ChatPage {
                     onCopy: (content: string): void => this.handleCopy(content),
                     onForward: (msg: Message): void => this.handleForward(msg),
                     onRetry: (msg: Message): void => this.retryMessage(msg),
-                    onOpenActions: (msg: Message): void => this.openMessageActions(msg)
+                    onOpenActions: (msg: Message): void => this.openMessageActions(msg),
+                    onLongContentCollapsed: (): void => this.scrollListToMessageId(message.id)
                   })
                 }
                 .width('100%')
@@ -814,6 +835,83 @@ export struct ChatPage {
     }
   }
 
+  private getForwardingPreviewParts(): ForwardedMessageParts | null {
+    return parseForwardedMessageContent(this.forwardingContent);
+  }
+
+  @Builder
+  private buildForwardingPreviewCard() {
+    Column() {
+      Row() {
+        Text('📨')
+          .fontSize(14)
+          .margin({ right: 6 })
+        Text(this.getForwardingPreviewParts()!.isBatch ? '批量转发' : '转发')
+          .fontSize(12)
+          .fontColor('#7A6B5A')
+        Text(' · 来自')
+          .fontSize(12)
+          .fontColor(SilkColors.textLight)
+          .margin({ left: 4, right: 4 })
+        Text(this.getForwardingPreviewParts()!.sourceName.length > 0 ?
+          this.getForwardingPreviewParts()!.sourceName : '未命名会话')
+          .fontSize(12)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(SilkColors.primary)
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .layoutWeight(1)
+      }
+      .width('100%')
+
+      if (this.getForwardingPreviewParts()!.senderName.length > 0) {
+        Row() {
+          Text('👤')
+            .fontSize(15)
+            .margin({ right: 8 })
+          Text(this.getForwardingPreviewParts()!.senderName)
+            .fontSize(15)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(SilkColors.textPrimary)
+            .maxLines(2)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .layoutWeight(1)
+        }
+        .width('100%')
+        .padding({ left: 8, right: 8, top: 8, bottom: 8 })
+        .margin({ top: 8 })
+        .backgroundColor('#FFFFFF')
+        .borderRadius(8)
+        .border({
+          width: 1,
+          color: '#E8E0D4'
+        })
+      }
+
+      Row()
+        .width('100%')
+        .height(1)
+        .backgroundColor('#E8E0D4')
+        .margin({ top: 8, bottom: 8 })
+
+      Text(this.getForwardingPreviewParts()!.body)
+        .fontSize(13)
+        .fontColor(SilkColors.textPrimary)
+        .maxLines(5)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Start)
+    .padding(12)
+    .backgroundColor(SilkColors.background)
+    .borderRadius(8)
+    .border({
+      width: { left: 3 },
+      color: SilkColors.primary
+    })
+    .margin({ bottom: 12 })
+  }
+
   @Builder
   private buildForwardSheet() {
     Column() {
@@ -824,15 +922,19 @@ export struct ChatPage {
         .margin({ bottom: 12 })
 
       if (this.forwardingContent) {
-        Text(this.forwardingContent)
-          .fontSize(12)
-          .fontColor(SilkColors.textSecondary)
-          .maxLines(3)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .padding(10)
-          .backgroundColor(SilkColors.background)
-          .borderRadius(8)
-          .margin({ bottom: 12 })
+        if (this.getForwardingPreviewParts() !== null) {
+          this.buildForwardingPreviewCard();
+        } else {
+          Text(this.forwardingContent)
+            .fontSize(12)
+            .fontColor(SilkColors.textSecondary)
+            .maxLines(3)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .padding(10)
+            .backgroundColor(SilkColors.background)
+            .borderRadius(8)
+            .margin({ bottom: 12 })
+        }
       }
 
       if (this.forwardTargets.length === 0) {
