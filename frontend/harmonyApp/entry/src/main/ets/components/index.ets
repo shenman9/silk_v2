@@ -8,4 +8,5 @@ export { LoadingIndicator } from './LoadingIndicator';
 export { ChatInput } from './ChatInput';
 export { MarkdownWeb } from './MarkdownWeb';
 export { MarkdownLite } from './MarkdownLite';
+export { MathKatexWeb } from './MathKatexWeb';
 export { AIMessageCard } from './AIMessageCard';

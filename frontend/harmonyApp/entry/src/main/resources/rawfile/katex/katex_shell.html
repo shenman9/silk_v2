@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <link rel="stylesheet" href="katex.min.css" />
+  <script src="katex.min.js"></script>
+  <style>
+    html, body { margin: 0; padding: 6px 8px; background: #EEF4FF; }
+    #fb {
+      color: #253B6E;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 14px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      word-break: break-word;
+      text-align: center;
+    }
+    #k { text-align: center; }
+    #k .katex-display { margin: 0.35em 0; }
+  </style>
+</head>
+<body>
+  <div id="fb"></div>
+  <div id="k" style="display:none"></div>
+  <script>
+    function start(tex) {
+      var fb = document.getElementById('fb');
+      var k = document.getElementById('k');
+      var s = (tex === null || tex === undefined) ? '' : String(tex);
+      fb.textContent = s.length ? s : '[公式]';
+      k.innerHTML = '';
+      k.style.display = 'none';
+      fb.style.display = 'block';
+      if (!s.trim()) {
+        return;
+      }
+      if (typeof katex === 'undefined') {
+        return;
+      }
+      try {
+        katex.render(s, k, {
+          displayMode: true,
+          throwOnError: false,
+          errorColor: '#b91c1c',
+          strict: false
+        });
+        fb.style.display = 'none';
+        k.style.display = 'block';
+      } catch (e) {
+        /* 保留文本兜底，避免空白 */
+      }
+    }
+  </script>
+</body>
+</html>

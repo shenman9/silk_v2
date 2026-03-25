@@ -119,6 +119,7 @@ export struct MessageBubble {
         Blank().height(10)
 
         if (this.isAIExpanded || !this.isLongAIContent()) {
+          // 稳定优先：临时统一走纯 ArkUI，避免 WebView 公式路径出现空白
           MarkdownLite({
             content: this.getSafeAIContent()
           })

@@ -2,7 +2,7 @@
  * ChatPage - 聊天页面
  * 使用 ChatStore + WebSocket 进行实时聊天
  */
-import { Message } from '../models/Message';
+import { Message, MessageType } from '../models/Message';
 import { Group } from '../models/Group';
 import { MessageBubble } from '../components';
 import { chatStore as globalChatStore, ConnectionState } from '../stores/ChatStore';
@@ -30,12 +30,16 @@ export struct ChatPage {
   @State private selectedActionMessage: Message | null = null;
   @State private isSelectionMode: boolean = false;
   @State private selectedMessageIds: string[] = [];
+  @State private isRecalling: boolean = false;
 
   private groupId: string = 'default_room';
   private userId: string = '';
   private userName: string = '';
   private isInitialized: boolean = false;
   private readonly apiClient = globalApiClient;
+  private listScroller: Scroller = new Scroller();
+  private didInitialScroll: boolean = false;
+  private lastSyncedMessageCount: number = 0;
 
   aboutToAppear(): void {
     if (this.isInitialized) {
@@ -79,6 +83,9 @@ export struct ChatPage {
     AppStorage.setOrCreate<string>('currentGroupId', this.groupId);
     AppStorage.setOrCreate<string>('currentGroupName', this.groupName);
 
+    this.didInitialScroll = false;
+    this.lastSyncedMessageCount = 0;
+
     globalChatStore.onMessagesChanged = (): void => {
       this.syncMessages();
     };
@@ -120,8 +127,28 @@ export struct ChatPage {
       result.push(transient);
     }
 
+    const prevCount = this.lastSyncedMessageCount;
     this.messages = result;
     this.markMessagesAsSent(confirmedOwnIds);
+    const newCount = result.length;
+    const shouldScrollToEnd = newCount > 0 && (!this.didInitialScroll || newCount > prevCount);
+    this.lastSyncedMessageCount = newCount;
+    if (newCount > 0 && !this.didInitialScroll) {
+      this.didInitialScroll = true;
+    }
+    if (shouldScrollToEnd) {
+      this.scheduleScrollToEnd();
+    }
+  }
+
+  private scheduleScrollToEnd(): void {
+    setTimeout((): void => {
+      if (this.messages.length === 0) {
+        return;
+      }
+      const lastIndex = this.messages.length - 1;
+      this.listScroller.scrollToIndex(lastIndex, false, ScrollAlign.END);
+    }, 80);
   }
 
   private handleSend(message: string): void {
@@ -205,6 +232,53 @@ export struct ChatPage {
       return;
     }
     this.openMessageActions(message);
+  }
+
+  private canRecallSelectedMessage(): boolean {
+    const msg = this.selectedActionMessage;
+    if (!msg) {
+      return false;
+    }
+    if (msg.isTransient) {
+      return false;
+    }
+    if (msg.type !== MessageType.TEXT) {
+      return false;
+    }
+    if (msg.userId !== this.userId) {
+      return false;
+    }
+    if (msg.userId === 'silk_ai_agent') {
+      return false;
+    }
+    return true;
+  }
+
+  private handleRecallSelected(): void {
+    const msg = this.selectedActionMessage;
+    if (!msg || !this.canRecallSelectedMessage()) {
+      return;
+    }
+    this.runRecallMessage(msg);
+  }
+
+  private async runRecallMessage(msg: Message): Promise<void> {
+    this.isRecalling = true;
+    try {
+      const response = await this.apiClient.recallMessage(this.groupId, msg.id, this.userId);
+      if (response.success) {
+        this.showToast('已撤回');
+        this.showBottomSheet = false;
+        this.selectedActionMessage = null;
+      } else {
+        this.showToast(response.message ? response.message : '撤回失败');
+      }
+    } catch (error) {
+      console.error(`Recall failed: ${error}`);
+      this.showToast('撤回失败');
+    } finally {
+      this.isRecalling = false;
+    }
   }
 
   private startForwardFromActions(message: Message): void {
@@ -567,7 +641,7 @@ export struct ChatPage {
         .layoutWeight(1)
         .justifyContent(FlexAlign.Center)
       } else {
-        List({ space: 4 }) {
+        List({ space: 4, scroller: this.listScroller }) {
           ForEach(this.messages, (message: Message, index?: number) => {
             ListItem() {
               Column() {
@@ -689,7 +763,7 @@ export struct ChatPage {
     .height('100%')
     .backgroundColor(SilkColors.background)
     .bindSheet($$this.showBottomSheet, this.buildBottomSheet(), {
-      height: this.bottomSheetMode === 'forward' ? '55%' : '36%',
+      height: this.bottomSheetMode === 'forward' ? '55%' : '44%',
       backgroundColor: SilkColors.surface
     })
   }
@@ -873,6 +947,19 @@ export struct ChatPage {
           this.showBottomSheet = false;
           this.selectedActionMessage = null;
         })
+
+      if (this.canRecallSelectedMessage()) {
+        Button(this.isRecalling ? '撤回中...' : '撤回')
+          .width('100%')
+          .height(42)
+          .backgroundColor(SilkColors.surfaceVariant)
+          .fontColor(SilkColors.error)
+          .margin({ top: 8 })
+          .enabled(!this.isRecalling)
+          .onClick(() => {
+            this.handleRecallSelected();
+          })
+      }
 
       Button('取消')
         .width('100%')

@@ -27,6 +27,10 @@ export struct LoginPage {
 
   private readonly apiClient = globalApiClient;
 
+  aboutToAppear(): void {
+    this.prefillQuickLoginUserName();
+  }
+
   build() {
     Column() {
       // Logo 区域
@@ -305,6 +309,23 @@ export struct LoginPage {
     this.username = username;
     this.password = password;
     await this.handleLogin();
+  }
+
+  /**
+   * 进入登录页时预填已保存的用户名（密码仍只存在 preferences，需点「一键登录」或手动输入）
+   */
+  private async prefillQuickLoginUserName(): Promise<void> {
+    try {
+      const context = getContext(this) as common.UIAbilityContext;
+      const pref = await dataPreferences.getPreferences(context, LoginPage.QUICK_LOGIN_STORE);
+      const prefUser = await pref.get(LoginPage.QUICK_LOGIN_USER_KEY, '');
+      const u = `${prefUser}`.trim();
+      if (u.length > 0 && this.username.trim().length === 0) {
+        this.username = u;
+      }
+    } catch (error) {
+      console.error('预填一键登录用户名失败:', error);
+    }
   }
 
   private async saveQuickLoginCredentials(): Promise<void> {

@@ -9,9 +9,10 @@ description: Implement stable Markdown rendering for HarmonyOS chat UIs using pu
 Render chat Markdown with high stability on HarmonyOS, prioritizing crash resistance over full web-level feature parity.
 
 ## Default Strategy
-1. Prefer pure ArkUI rendering (`Text`, `Row`, `Column`) over `Web` components.
-2. Parse Markdown into block types first, then render each block with fixed styles.
-3. Keep AI/transient message paths simple and avoid nested complex component chains.
+1. Parse Markdown into block types first; render each block with fixed styles in ArkUI (`Text`, `Row`, `Column`).
+2. **Math blocks only** (`$$…$$`, `\[…\]`, single-line `$$…$$`): use `MathKatexWeb` + **offline** `resources/rawfile/katex/` (`katex_shell.html`, `katex.min.js`, `katex.min.css`, `fonts/`). The shell page always shows plain TeX first, then swaps to KaTeX—avoid blank.
+3. Do **not** use full-page remote CDN Markdown+KaTeX in `Web` for chat (network / mixed content / timing blanks).
+4. Keep AI/transient message paths simple and avoid nested complex component chains.
 
 ## Recommended Supported Syntax
 - Headings: `#` to `######`
@@ -19,6 +20,8 @@ Render chat Markdown with high stability on HarmonyOS, prioritizing crash resist
 - Ordered list: `1. ...`
 - Quote: `> ...`
 - Code block: triple backticks
+- Math block: `$$ ... $$` and `\[ ... \]` (offline KaTeX Web slice + text fallback in HTML)
+- Inline math: `$...$` and `\(...\)` (rendered as inline marker style)
 - Divider: `---`, `***`, `___`
 - Basic inline cleanup: links/images/emphasis/code marker stripping
 
@@ -27,7 +30,7 @@ Render chat Markdown with high stability on HarmonyOS, prioritizing crash resist
 - Avoid `for...in`; use `Object.keys()` + indexed loop.
 - Avoid `any`/`unknown`; use explicit types.
 - Keep long content expandable to reduce layout pressure.
-- Treat WebView + remote CDN renderers as fallback only.
+- Treat WebView as **isolated, offline KaTeX** for math blocks only—not whole Markdown.
 
 ## Integration Checklist
 - [ ] Markdown renderer is pure ArkUI by default
