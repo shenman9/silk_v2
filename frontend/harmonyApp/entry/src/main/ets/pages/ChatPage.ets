@@ -560,6 +560,22 @@ export struct ChatPage {
     return `${month}-${day} ${hours}:${minutes}`;
   }
 
+  /** 与 Android ChatScreen 一致：群组名为 [Silk] 开头表示与 Silk 的专属私聊，无需再点 @ */
+  private isSilkPrivateChat(): boolean {
+    return this.groupName.startsWith('[Silk]');
+  }
+
+  private applySilkQuickMention(): void {
+    this.messageInput = '@Silk ';
+  }
+
+  private getMessageInputPlaceholder(): string {
+    if (this.isSilkPrivateChat()) {
+      return '直接输入消息与 Silk 对话...';
+    }
+    return '输入消息...';
+  }
+
   build() {
     Column() {
       // 顶部导航栏
@@ -703,30 +719,51 @@ export struct ChatPage {
         .padding({ top: 8, bottom: 8 })
       }
 
-      // 输入区域
-      Row() {
-        TextInput({ placeholder: '输入消息...', text: $$this.messageInput })
-          .layoutWeight(1)
-          .height(44)
-          .backgroundColor(SilkColors.surface)
-          .borderRadius(22)
-          .padding({ left: 16, right: 16 })
-          .fontColor(SilkColors.textPrimary)
-          .placeholderColor(SilkColors.textLight)
-          .fontSize(16)
+      // 输入区域（普通群显示 @Silk 快捷填入；[Silk] 专属私聊与多选模式不显示）
+      Column() {
+        if (!this.isSilkPrivateChat() && !this.isSelectionMode) {
+          Row() {
+            Text('@Silk')
+              .fontSize(14)
+              .fontColor(SilkColors.primary)
+              .fontWeight(FontWeight.Medium)
+              .padding({ left: 12, right: 12, top: 6, bottom: 6 })
+              .backgroundColor('#26C9A86C')
+              .borderRadius(8)
+              .onClick((): void => {
+                this.applySilkQuickMention();
+              })
+          }
+          .width('100%')
+          .justifyContent(FlexAlign.Start)
+          .margin({ bottom: 6 })
+        }
 
-        Button('发送')
-          .width(60)
-          .height(44)
-          .backgroundColor(this.messageInput.trim() ? SilkColors.primary : SilkColors.border)
-          .fontColor(SilkColors.onPrimary)
-          .borderRadius(22)
-          .margin({ left: 8 })
-          .enabled(this.messageInput.trim().length > 0)
-          .onClick((): void => {
-            this.handleSend(this.messageInput);
-            this.messageInput = '';
-          })
+        Row() {
+          TextInput({ placeholder: this.getMessageInputPlaceholder(), text: $$this.messageInput })
+            .layoutWeight(1)
+            .height(44)
+            .backgroundColor(SilkColors.surface)
+            .borderRadius(22)
+            .padding({ left: 16, right: 16 })
+            .fontColor(SilkColors.textPrimary)
+            .placeholderColor(SilkColors.textLight)
+            .fontSize(16)
+
+          Button('发送')
+            .width(60)
+            .height(44)
+            .backgroundColor(this.messageInput.trim() ? SilkColors.primary : SilkColors.border)
+            .fontColor(SilkColors.onPrimary)
+            .borderRadius(22)
+            .margin({ left: 8 })
+            .enabled(this.messageInput.trim().length > 0)
+            .onClick((): void => {
+              this.handleSend(this.messageInput);
+              this.messageInput = '';
+            })
+        }
+        .width('100%')
       }
       .width('100%')
       .padding({ left: 12, right: 12, top: 8, bottom: 8 })

@@ -19,7 +19,8 @@ Render chat Markdown with high stability on HarmonyOS, prioritizing crash resist
 - Bullets: `-`, `*`, `+`
 - Ordered list: `1. ...`
 - Quote: `> ...`
-- Code block: triple backticks
+- Code block: triple backticks（支持 ```lang；行内高亮：关键字 / 字符串 / 注释 / 数字，语言 `typescript`/`js`、`kotlin`、`python`、`sql` 等）
+- Table: `| col |` 连续行合并为网格表头+斑马纹（跳过分隔行）
 - Math block: `$$ ... $$` and `\[ ... \]` (offline KaTeX Web slice + text fallback in HTML)
 - Inline math: `$...$` and `\(...\)` (rendered as inline marker style)
 - Divider: `---`, `***`, `___`
