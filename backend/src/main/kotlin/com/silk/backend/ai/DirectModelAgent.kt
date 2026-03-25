@@ -2,6 +2,8 @@ package com.silk.backend.ai
 
 import com.silk.backend.search.WeaviateClient
 import com.silk.backend.search.SearchMode
+import com.silk.backend.ai.ToolPolicyManager.ToolPermission
+import com.silk.backend.ai.ToolPolicyManager.ToolPolicy
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.Serializable
@@ -226,6 +228,8 @@ class DirectModelAgent(
     suspend fun processInput(
         userInput: String,
         systemPrompt: String? = null,
+        requestUserId: String = "",
+        accessibleSessionIds: List<String> = listOf(sessionId),
         callback: suspend (stepType: String, content: String, isComplete: Boolean) -> Unit
     ): String {
         // 添加用户消息到历史
@@ -237,7 +241,7 @@ class DirectModelAgent(
         }
         
         // 直接调用模型（支持 tool calling）
-        return chatWithTools(callback)
+        return chatWithTools(callback, requestUserId, accessibleSessionIds)
     }
     
     /**
@@ -246,7 +250,9 @@ class DirectModelAgent(
      * ✅ 从一开始就使用流式API，在流中检测 tool_calls
      */
     private suspend fun chatWithTools(
-        callback: suspend (stepType: String, content: String, isComplete: Boolean) -> Unit
+        callback: suspend (stepType: String, content: String, isComplete: Boolean) -> Unit,
+        requestUserId: String,
+        accessibleSessionIds: List<String>
     ): String {
         val maxIterations = 50  // 防止无限循环
         var iteration = 0
@@ -278,7 +284,7 @@ class DirectModelAgent(
                         "【仅执行一次】已执行过文档搜索。请根据上方已有的搜索结果直接回答用户，不要再次调用本工具。"
                     } else {
                         if (toolCall.function.name == "search_context") searchContextCalledThisTurn = true
-                        executeTool(toolCall, callback)
+                        executeTool(toolCall, callback, requestUserId, accessibleSessionIds)
                     }
                     
                     // 添加 tool 结果到历史
@@ -620,6 +626,7 @@ class DirectModelAgent(
     /**
      * 获取可用的工具列表
      * 这里定义模型可以使用的工具
+     * ✅ 已禁用(DISABLED)的工具不会出现在列表中，模型无法看到或调用
      */
     private fun getAvailableTools(): List<Tool> {
         // 辅助函数：创建 required 数组
@@ -627,7 +634,8 @@ class DirectModelAgent(
             return JsonArray(items.map { JsonPrimitive(it) })
         }
         
-        return listOf(
+        // 定义所有工具
+        val allTools = listOf(
             // 上下文搜索工具（搜索已上传的PDF文件和聊天记录）
             Tool(
                 function = ToolDefinition(
@@ -735,20 +743,86 @@ class DirectModelAgent(
                 )
             )
         )
+        
+        // ✅ 过滤掉被禁用的工具，模型无法看到或调用这些工具
+        return allTools.filter { tool ->
+            val policy = ToolPolicyManager.getPolicy(tool.function.name)
+            val isAllowed = policy.permission != ToolPermission.DISABLED
+            if (!isAllowed) {
+                logger.info("🔒 工具 '${tool.function.name}' 已禁用，不会暴露给模型")
+            }
+            isAllowed
+        }
     }
     
     /**
-     * 执行工具调用
+     * 执行工具调用（带权限检查）
      */
     private suspend fun executeTool(
         toolCall: ToolCall,
-        callback: suspend (stepType: String, content: String, isComplete: Boolean) -> Unit
+        callback: suspend (stepType: String, content: String, isComplete: Boolean) -> Unit,
+        requestUserId: String,
+        accessibleSessionIds: List<String>
     ): String {
         val toolName = toolCall.function.name
         val arguments = toolCall.function.arguments
         
+        // ✅ 工具策略检查
+        val policy = ToolPolicyManager.getPolicy(toolName)
+
+        val sessionScopedTools = setOf("search_context", "search_files", "read_file", "get_group_stats")
+        val canUseBySession = when (toolName) {
+            "get_group_stats" -> accessibleSessionIds.contains(sessionId)
+            "search_context", "search_files", "read_file" -> accessibleSessionIds.isNotEmpty()
+            else -> true
+        }
+
+        if (toolName in sessionScopedTools && !canUseBySession) {
+            logger.warn("⛔ 工具 '$toolName' 的会话权限不足 (sessionId=$sessionId, accessible=${accessibleSessionIds.size})")
+            ToolPolicyManager.logAudit(
+                toolName = toolName,
+                permission = policy.permission,
+                result = "DENIED",
+                details = "session access denied; arguments=$arguments",
+                sessionId = sessionId,
+                userId = requestUserId
+            )
+            callback("tool", "⛔ 权限不足：无法访问该会话的相关内容 ($toolName)", false)
+            return "⚠️ 权限不足：无法访问该会话的相关内容。"
+        }
+
+        // 记录审计日志（此时已通过会话作用域校验）
+        val auditResult = when (policy.permission) {
+            ToolPermission.DISABLED -> "DENIED"
+            ToolPermission.SANDBOXED -> "SANDBOXED"
+            ToolPermission.ALLOWED -> "ALLOWED"
+        }
+        ToolPolicyManager.logAudit(
+            toolName = toolName,
+            permission = policy.permission,
+            result = auditResult,
+            details = "arguments=$arguments",
+            sessionId = sessionId,
+            userId = requestUserId
+        )
+
+        when (policy.permission) {
+            ToolPermission.DISABLED -> {
+                logger.warn("⛔ 工具 '$toolName' 已被禁用")
+                callback("tool", "⛔ 工具已禁用: $toolName", false)
+                return "⚠️ 该功能已被禁用。原因：${policy.description}"
+            }
+            ToolPermission.SANDBOXED -> {
+                logger.info("🔒 工具 '$toolName' 在沙箱模式下执行")
+                callback("tool", "🔒 [沙箱] 执行: $toolName", false)
+            }
+            ToolPermission.ALLOWED -> {
+                logger.info("✅ 工具 '$toolName' 允许执行")
+                callback("tool", "🔧 执行: $toolName", false)
+            }
+        }
+        
         logger.info("🔧 执行工具: $toolName, 参数: $arguments")
-        callback("tool", "🔧 执行: $toolName", false)
         
         return try {
             val args = json.parseToJsonElement(arguments).jsonObject
@@ -757,7 +831,8 @@ class DirectModelAgent(
                 "search_files" -> {
                     val query = args["query"]?.jsonPrimitive?.content ?: ""
                     val path = args["path"]?.jsonPrimitive?.content ?: "."
-                    searchFiles(query, path)
+                    // ✅ 应用沙箱限制
+                    searchFilesWithPolicy(query, path, policy, accessibleSessionIds)
                 }
                 
                 "search_web" -> {
@@ -767,17 +842,19 @@ class DirectModelAgent(
                 
                 "read_file" -> {
                     val path = args["path"]?.jsonPrimitive?.content ?: ""
-                    readFile(path)
+                    // ✅ 应用沙箱限制
+                    readFileWithPolicy(path, policy, accessibleSessionIds)
                 }
                 
                 "execute_command" -> {
                     val command = args["command"]?.jsonPrimitive?.content ?: ""
-                    executeCommand(command)
+                    // ✅ 已经在上面检查过权限，这里执行沙箱化的命令
+                    executeCommandWithPolicy(command, policy, requestUserId)
                 }
                 
                 "search_context" -> {
                     val query = args["query"]?.jsonPrimitive?.content ?: ""
-                    searchContext(query)
+                    searchContext(query, requestUserId, accessibleSessionIds)
                 }
                 
                 "get_group_stats" -> {
@@ -795,9 +872,17 @@ class DirectModelAgent(
     // ==================== 工具实现 ====================
     
     /**
-     * 搜索本地文件
+     * 搜索本地文件（沙箱化）
      */
     private fun searchFiles(query: String, path: String): String {
+        // ✅ 权限检查
+        val policy = ToolPolicyManager.getPolicy("search_files")
+        val (valid, errorMsg) = ToolPolicyManager.validateFilePath(path, policy)
+        if (!valid) {
+            logger.warn("⛔ [search_files] 路径访问被拒绝: $path - $errorMsg")
+            return "⛔ $errorMsg"
+        }
+        
         return try {
             val searchDir = java.io.File(path)
             if (!searchDir.exists()) {
@@ -824,6 +909,124 @@ class DirectModelAgent(
         } catch (e: Exception) {
             "搜索失败: ${e.message}"
         }
+    }
+
+    private fun safeCanonicalPath(path: String): String {
+        return try {
+            java.io.File(path).canonicalPath
+        } catch (_: Exception) {
+            java.io.File(path).absolutePath
+        }
+    }
+
+    private fun validatePathWithinAccessibleSessions(
+        path: String,
+        accessibleSessionIds: List<String>
+    ): Pair<Boolean, String> {
+        if (accessibleSessionIds.isEmpty()) {
+            return Pair(false, "没有可访问的会话会话范围")
+        }
+        if (path.isBlank()) {
+            return Pair(false, "文件路径为空")
+        }
+
+        val target = safeCanonicalPath(path)
+        val allowedPrefixes = accessibleSessionIds.flatMap { sid ->
+            listOf(
+                safeCanonicalPath("chat_history/$sid"),
+                safeCanonicalPath("backend/chat_history/$sid")
+            )
+        }.distinct()
+
+        val allowed = allowedPrefixes.any { prefix ->
+            target == prefix || target.startsWith("$prefix/")
+        }
+
+        return if (allowed) {
+            Pair(true, "")
+        } else {
+            Pair(false, "路径不在当前用户可访问的会话目录内")
+        }
+    }
+
+    private fun searchFilesWithPolicy(
+        query: String,
+        path: String,
+        policy: ToolPolicy,
+        accessibleSessionIds: List<String>
+    ): String {
+        val trimmedPath = path.trim()
+        val effectiveRoots = if (trimmedPath.isEmpty() || trimmedPath == ".") {
+            accessibleSessionIds.map { "chat_history/$it" }
+        } else {
+            listOf(trimmedPath)
+        }
+
+        if (effectiveRoots.isEmpty()) {
+            return "⛔ 权限不足：无法访问文件"
+        }
+
+        val maxResults = 10
+        val results = mutableListOf<String>()
+
+        for (root in effectiveRoots) {
+            if (results.size >= maxResults) break
+
+            val (policyOk, policyErr) = ToolPolicyManager.validateFilePath(root, policy)
+            if (!policyOk) {
+                logger.warn("⛔ [search_files] 路径被策略拒绝: $root - $policyErr")
+                continue
+            }
+
+            val (sessionOk, sessionErr) = validatePathWithinAccessibleSessions(root, accessibleSessionIds)
+            if (!sessionOk) {
+                logger.warn("⛔ [search_files] 路径不在会话范围: $root - $sessionErr")
+                continue
+            }
+
+            val searchDir = java.io.File(root)
+            if (!searchDir.exists()) continue
+
+            searchDir.walkTopDown()
+                .take(1000) // 限制搜索深度
+                .filter { it.isFile }
+                .filter { it.name.contains(query, ignoreCase = true) }
+                .take(maxResults - results.size)
+                .forEach { file ->
+                    results.add("📄 ${file.path} (${file.length()} bytes)")
+                }
+        }
+
+        return if (results.isEmpty()) {
+            "未找到匹配的文件"
+        } else {
+            "找到 ${results.size} 个文件:\n" + results.joinToString("\n")
+        }
+    }
+
+    private fun readFileWithPolicy(
+        path: String,
+        policy: ToolPolicy,
+        accessibleSessionIds: List<String>
+    ): String {
+        val trimmedPath = path.trim()
+        if (trimmedPath.isEmpty()) {
+            return "⛔ 文件路径为空"
+        }
+
+        val (policyOk, policyErr) = ToolPolicyManager.validateFilePath(trimmedPath, policy)
+        if (!policyOk) {
+            logger.warn("⛔ [read_file] 路径被策略拒绝: $trimmedPath - $policyErr")
+            return "⛔ $policyErr"
+        }
+
+        val (sessionOk, sessionErr) = validatePathWithinAccessibleSessions(trimmedPath, accessibleSessionIds)
+        if (!sessionOk) {
+            logger.warn("⛔ [read_file] 路径不在会话范围: $trimmedPath - $sessionErr")
+            return "⛔ $sessionErr"
+        }
+
+        return readFile(trimmedPath)
     }
     
     /**
@@ -1022,15 +1225,25 @@ class DirectModelAgent(
     }
     
     /**
-     * 执行命令
+     * 执行命令（应用权限策略）
      */
-    private fun executeCommand(command: String): String {
-        // 安全限制：只允许执行特定的安全命令
-        val safeCommands = listOf("ls", "pwd", "echo", "date", "whoami", "cat")
-        val commandPrefix = command.trim().split(" ").first()
+    private fun executeCommandWithPolicy(command: String, policy: ToolPolicy, requestUserId: String): String {
         
-        if (commandPrefix !in safeCommands) {
-            return "⚠️ 安全限制：只允许执行以下命令: ${safeCommands.joinToString(", ")}"
+        // ✅ 检查权限
+        if (policy.permission == ToolPermission.DISABLED) {
+            logger.warn("⛔ [安全] execute_command 工具已被禁用")
+            return "⚠️ 该功能已被禁用。出于安全考虑，命令执行功能不可用。"
+        }
+        
+        // 如果是 SANDBOXED 模式，执行更严格的限制
+        if (policy.permission == ToolPermission.SANDBOXED) {
+            val safeCommands = listOf("ls", "pwd", "echo", "date", "whoami")
+            val commandPrefix = command.trim().split(" ").first()
+            
+            if (commandPrefix !in safeCommands) {
+                logger.warn("⛔ [安全] 命令不在白名单中: $commandPrefix")
+                return "⚠️ 安全限制：只允许执行以下命令: ${safeCommands.joinToString(", ")}"
+            }
         }
         
         return try {
@@ -1041,8 +1254,10 @@ class DirectModelAgent(
             val output = process.inputStream.bufferedReader().readText()
             process.waitFor(10, java.util.concurrent.TimeUnit.SECONDS)
             
+            logger.info("✅ [执行命令] 成功: $command")
             "💻 执行: $command\n\n$output"
         } catch (e: Exception) {
+            logger.error("❌ [执行命令] 失败: ${e.message}")
             "命令执行失败: ${e.message}"
         }
     }
@@ -1051,34 +1266,48 @@ class DirectModelAgent(
      * 搜索已上传的上下文（PDF文件、聊天记录等）
      * 使用 Weaviate 进行语义搜索
      */
-    private fun searchContext(query: String): String {
+    private fun searchContext(
+        query: String,
+        requestUserId: String,
+        accessibleSessionIds: List<String>
+    ): String {
         return try {
-            logger.info("🔍 [Weaviate] 搜索上下文: $query (sessionId: $sessionId)")
+            if (accessibleSessionIds.isEmpty()) {
+                return "⛔ 权限不足：无法访问该会话的上下文"
+            }
+
+            logger.info("🔍 [Weaviate] 搜索上下文: $query (userId=$requestUserId, sessions=${accessibleSessionIds.size})")
             
             // 使用 runBlocking 调用 suspend 函数
-            val result = runBlocking {
-                // 先检查 Weaviate 是否可用
-                if (!weaviateClient.isReady()) {
-                    return@runBlocking null
-                }
-                
-                // 执行隔离搜索（只搜索当前会话）
-                weaviateClient.isolatedSearch(
-                    query = query,
-                    userId = "default_user",
-                    currentSessionId = sessionId,
-                    mode = SearchMode.FOREGROUND_ONLY,
-                    foregroundLimit = 10,
-                    alpha = 0.5f
-                )
-            }
-            
-            if (result == null) {
+            val ready = runBlocking { weaviateClient.isReady() }
+            if (!ready) {
                 return "⚠️ Weaviate 搜索服务不可用，请确保 Weaviate 已启动"
             }
-            
-            var documents = result.foreground.documents
-            
+
+            val maxDocs = 10
+
+            fun searchInAccessibleSessions(searchQuery: String, perQueryLimit: Int): List<com.silk.backend.search.SearchDocument> {
+                val docs = mutableListOf<com.silk.backend.search.SearchDocument>()
+                for (sid in accessibleSessionIds) {
+                    if (docs.size >= perQueryLimit) break
+
+                    val result = runBlocking {
+                        weaviateClient.isolatedSearch(
+                            query = searchQuery,
+                            userId = requestUserId,
+                            currentSessionId = sid,
+                            mode = SearchMode.FOREGROUND_ONLY,
+                            foregroundLimit = perQueryLimit,
+                            alpha = 0.5f
+                        )
+                    }
+                    docs.addAll(result.foreground.documents)
+                }
+                return docs.take(perQueryLimit)
+            }
+
+            var documents = searchInAccessibleSessions(query, maxDocs)
+
             // 如果搜索结果为空，尝试更广泛的搜索策略
             if (documents.isEmpty()) {
                 logger.info("🔍 [Weaviate] 初次搜索无结果，尝试更广泛的搜索...")
@@ -1086,19 +1315,8 @@ class DirectModelAgent(
                 // 策略1: 如果查询包含中文关键词，尝试英文同义词
                 val expandedQueries = expandQuery(query)
                 for (expandedQuery in expandedQueries) {
-                    val expandedResult = runBlocking {
-                        if (!weaviateClient.isReady()) return@runBlocking null
-                        weaviateClient.isolatedSearch(
-                            query = expandedQuery,
-                            userId = "default_user",
-                            currentSessionId = sessionId,
-                            mode = SearchMode.FOREGROUND_ONLY,
-                            foregroundLimit = 10,
-                            alpha = 0.5f
-                        )
-                    }
-                    if (expandedResult != null && expandedResult.foreground.documents.isNotEmpty()) {
-                        documents = expandedResult.foreground.documents
+                    documents = searchInAccessibleSessions(expandedQuery, maxDocs)
+                    if (documents.isNotEmpty()) {
                         logger.info("🔍 [Weaviate] 扩展搜索 '$expandedQuery' 找到 ${documents.size} 条结果")
                         break
                     }
@@ -1106,19 +1324,8 @@ class DirectModelAgent(
                 
                 // 策略2: 如果仍然没有结果，搜索该会话中的所有文件（不限关键词）
                 if (documents.isEmpty()) {
-                    val allFilesResult = runBlocking {
-                        if (!weaviateClient.isReady()) return@runBlocking null
-                        weaviateClient.isolatedSearch(
-                            query = "file pdf document",  // 通用文件关键词
-                            userId = "default_user",
-                            currentSessionId = sessionId,
-                            mode = SearchMode.FOREGROUND_ONLY,
-                            foregroundLimit = 20,
-                            alpha = 0.5f
-                        )
-                    }
-                    if (allFilesResult != null && allFilesResult.foreground.documents.isNotEmpty()) {
-                        documents = allFilesResult.foreground.documents
+                    documents = searchInAccessibleSessions("file pdf document", 20).take(maxDocs)
+                    if (documents.isNotEmpty()) {
                         logger.info("🔍 [Weaviate] 通用文件搜索找到 ${documents.size} 条结果")
                     }
                 }
@@ -1131,14 +1338,18 @@ class DirectModelAgent(
                 sb.append("🔍 **搜索结果: $query** (找到 ${documents.size} 条相关内容)\n\n")
                 
                 // 按文件分组，避免重复显示同一文件的多个块
-                val groupedDocs = documents.groupBy { it.title ?: "无标题" }
+                val groupedDocs = documents.groupBy { doc ->
+                    doc.sessionId to (doc.title ?: "无标题")
+                }
                 var index = 0
-                for ((title, docs) in groupedDocs) {
+                for ((key, docs) in groupedDocs) {
+                    val (sid, title) = key
                     index++
                     // 取该文件得分最高的块
                     val bestDoc = docs.maxByOrNull { it.score } ?: docs.first()
                     sb.append("---\n")
                     sb.append("**${index}. [${bestDoc.sourceType}] $title**\n")
+                    sb.append("   📌 会话: $sid\n")
                     if (bestDoc.filePath != null) {
                         sb.append("   📁 文件: ${bestDoc.filePath}\n")
                     }

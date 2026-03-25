@@ -89,3 +89,12 @@ frontend/webApp/src/main/kotlin/com/silk/web/public_cloud.txt
 
 # Internal reference only (do not publish)
 SECURITY_AUDIT.md
+
+# HarmonyOS (frontend/harmonyApp) build/runtime caches & deps
+frontend/harmonyApp/.hvigor/
+frontend/harmonyApp/.npmrc
+frontend/harmonyApp/.ohpmrc
+frontend/harmonyApp/AppScope/
+frontend/harmonyApp/hvigor/
+frontend/harmonyApp/oh-package-lock.json5
+frontend/harmonyApp/oh_modules/

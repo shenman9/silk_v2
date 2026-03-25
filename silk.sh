@@ -11,7 +11,8 @@
 #   ./silk.sh logs     - 查看日志
 #   ./silk.sh build    - 构建前端 (WebApp)
 #   ./silk.sh build-apk - 构建 Android APK
-#   ./silk.sh build-all - 构建全部 (WebApp + APK)
+#   ./silk.sh build-hap - 构建 HarmonyOS HAP
+#   ./silk.sh build-all - 构建全部 (WebApp + APK + HAP)
 #   ./silk.sh status   - 检查所有服务状态
 #   ./silk.sh weaviate - Weaviate 管理 (start/stop/status/schema)
 # ============================================================
@@ -678,6 +679,95 @@ build_apk() {
 }
 
 # ============================================================
+# 构建 HarmonyOS HAP
+# ============================================================
+
+build_hap() {
+    print_header "📱 构建 HarmonyOS HAP"
+    
+    local HARMONY_DIR="$SILK_DIR/frontend/harmonyApp"
+    
+    # 检查 DevEco Studio 是否安装
+    if [ -z "$DEVECO_HOME" ]; then
+        # 尝试常见安装路径
+        if [ -d "/Applications/DevEco-Studio.app" ]; then
+            DEVECO_HOME="/Applications/DevEco-Studio.app/Contents"
+        elif [ -d "$HOME/DevEco-Studio" ]; then
+            DEVECO_HOME="$HOME/DevEco-Studio"
+        elif [ -d "/opt/DevEco-Studio" ]; then
+            DEVECO_HOME="/opt/DevEco-Studio"
+        fi
+    fi
+    
+    # 检查 hvigorw 命令
+    local HVIGORW="$HARMONY_DIR/hvigorw"
+    if [ ! -f "$HVIGORW" ]; then
+        echo -e "${YELLOW}⚠ hvigorw 未找到，请先在 DevEco Studio 中打开项目以生成构建脚本${NC}"
+        echo ""
+        echo -e "${CYAN}使用说明:${NC}"
+        echo "  1. 打开 DevEco Studio"
+        echo "  2. 选择 'Open Project'"
+        echo "  3. 打开目录: $HARMONY_DIR"
+        echo "  4. 等待项目初始化完成"
+        echo "  5. 使用 DevEco Studio 内置构建功能或重新运行此脚本"
+        echo ""
+        echo -e "${CYAN}或者手动构建:${NC}"
+        echo "  cd $HARMONY_DIR"
+        echo "  hvigorw assembleHap --mode module -p module=entry@entry"
+        return 1
+    fi
+    
+    # 从 .env 取后端地址
+    if [ -n "$BACKEND_BASE_URL" ]; then
+        HAP_BACKEND_URL="$BACKEND_BASE_URL"
+    elif [ -n "$BACKEND_HOST" ]; then
+        HAP_BACKEND_URL="http://${BACKEND_HOST}:${BACKEND_HTTP_PORT:-8003}"
+    else
+        HAP_BACKEND_URL="http://localhost:${BACKEND_HTTP_PORT:-8003}"
+    fi
+    echo -e "  后端地址: ${CYAN}$HAP_BACKEND_URL${NC}"
+    
+    echo ""
+    echo -e "${BLUE}正在构建 HarmonyOS HAP...${NC}"
+    cd "$HARMONY_DIR"
+    
+    # 执行构建
+    $HVIGORW assembleHap --mode module -p module=entry@entry 2>&1
+    
+    if [ $? -eq 0 ]; then
+        # 查找生成的 HAP 文件
+        local HAP_FILE=$(find "$HARMONY_DIR/entry/build" -name "*.hap" -type f 2>/dev/null | head -1)
+        
+        if [ -n "$HAP_FILE" ]; then
+            local HAP_SIZE=$(du -h "$HAP_FILE" | cut -f1)
+            
+            echo ""
+            echo -e "${GREEN}✅ HAP 构建成功${NC}"
+            echo -e "  大小: $HAP_SIZE"
+            echo -e "  路径: $HAP_FILE"
+            
+            # 复制到 backend/static 目录供下载
+            echo ""
+            echo -e "${BLUE}复制到 backend/static 目录供下载...${NC}"
+            mkdir -p "$APK_OUTPUT_DIR"
+            cp "$HAP_FILE" "$APK_OUTPUT_DIR/"
+            
+            local HAP_NAME=$(basename "$HAP_FILE")
+            ln -sf "$APK_OUTPUT_DIR/$HAP_NAME" "$APK_OUTPUT_DIR/silk.hap"
+            echo -e "${GREEN}✅ 已复制到: $APK_OUTPUT_DIR/$HAP_NAME${NC}"
+            echo -e "${GREEN}✅ 已创建链接: $APK_OUTPUT_DIR/silk.hap${NC}"
+        else
+            echo ""
+            echo -e "${YELLOW}⚠ HAP 构建成功但未找到输出文件${NC}"
+        fi
+    else
+        echo ""
+        echo -e "${RED}❌ HAP 构建失败${NC}"
+        return 1
+    fi
+}
+
+# ============================================================
 # 构建全部
 # ============================================================
 
@@ -1090,6 +1180,9 @@ case "$1" in
     build-apk|ba)
         build_apk
         ;;
+    build-hap|bh)
+        build_hap
+        ;;
     build-all|bp)
         build_all
         ;;
@@ -1114,6 +1207,7 @@ case "$1" in
         echo "  logs, l       查看日志"
         echo "  build, b      构建前端 (WebApp)"
         echo "  build-apk, ba 构建 Android APK"
+        echo "  build-hap, bh 构建鸿蒙 HAP (需要 DevEco Studio)"
         echo "  build-all, bp 构建全部 (WebApp + APK)"
         echo "  status, s     检查所有服务状态"
         echo "  weaviate, w   Weaviate 管理 (start/stop/status/schema)"

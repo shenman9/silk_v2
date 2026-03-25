@@ -1,0 +1,128 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "Silk 智能协作平台"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "Silk 应用入口"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "Silk"
+    },
+    {
+      "name": "app_name",
+      "value": "Silk"
+    },
+    {
+      "name": "login_title",
+      "value": "登录"
+    },
+    {
+      "name": "register_title",
+      "value": "注册"
+    },
+    {
+      "name": "username",
+      "value": "用户名"
+    },
+    {
+      "name": "password",
+      "value": "密码"
+    },
+    {
+      "name": "confirm_password",
+      "value": "确认密码"
+    },
+    {
+      "name": "full_name",
+      "value": "姓名"
+    },
+    {
+      "name": "phone_number",
+      "value": "手机号"
+    },
+    {
+      "name": "login_button",
+      "value": "登录"
+    },
+    {
+      "name": "register_button",
+      "value": "注册"
+    },
+    {
+      "name": "no_account",
+      "value": "没有账号？"
+    },
+    {
+      "name": "has_account",
+      "value": "已有账号？"
+    },
+    {
+      "name": "go_register",
+      "value": "去注册"
+    },
+    {
+      "name": "go_login",
+      "value": "去登录"
+    },
+    {
+      "name": "group_list_title",
+      "value": "群组列表"
+    },
+    {
+      "name": "create_group",
+      "value": "创建群组"
+    },
+    {
+      "name": "settings_title",
+      "value": "设置"
+    },
+    {
+      "name": "logout",
+      "value": "退出登录"
+    },
+    {
+      "name": "about",
+      "value": "关于"
+    },
+    {
+      "name": "input_placeholder",
+      "value": "输入消息..."
+    },
+    {
+      "name": "send",
+      "value": "发送"
+    },
+    {
+      "name": "connecting",
+      "value": "连接中..."
+    },
+    {
+      "name": "connected",
+      "value": "已连接"
+    },
+    {
+      "name": "disconnected",
+      "value": "已断开"
+    },
+    {
+      "name": "search_placeholder",
+      "value": "搜索文件..."
+    },
+    {
+      "name": "search_results",
+      "value": "搜索结果"
+    },
+    {
+      "name": "no_messages",
+      "value": "暂无消息"
+    },
+    {
+      "name": "loading",
+      "value": "加载中..."
+    }
+  ]
+}

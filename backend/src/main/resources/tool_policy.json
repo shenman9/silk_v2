@@ -1,0 +1,48 @@
+{
+  "policies": {
+    "search_context": {
+      "permission": "ALLOWED",
+      "allowedPaths": [],
+      "deniedPaths": [],
+      "description": "搜索当前会话的已上传文件和聊天记录"
+    },
+    "search_web": {
+      "permission": "ALLOWED",
+      "allowedPaths": [],
+      "deniedPaths": [],
+      "description": "互联网搜索"
+    },
+    "get_group_stats": {
+      "permission": "ALLOWED",
+      "allowedPaths": [],
+      "deniedPaths": [],
+      "description": "获取群组统计信息"
+    },
+    "search_files": {
+      "permission": "SANDBOXED",
+      "allowedPaths": ["chat_history", "uploads", "backend/chat_history", "backend/uploads"],
+      "deniedPaths": ["/etc", "/sys", "/proc"],
+      "description": "搜索文件（仅限用户上传目录）"
+    },
+    "read_file": {
+      "permission": "SANDBOXED",
+      "allowedPaths": ["chat_history", "uploads", "backend/chat_history", "backend/uploads"],
+      "deniedPaths": ["/etc", "/sys", "/proc", ".env", ".git"],
+      "description": "读取文件（仅限用户上传的文件）"
+    },
+    "execute_command": {
+      "permission": "DISABLED",
+      "allowedPaths": [],
+      "deniedPaths": [],
+      "description": "执行系统命令（已禁用）"
+    }
+  },
+  "_comment": {
+    "permission_levels": {
+      "ALLOWED": "允许执行，无限制",
+      "SANDBOXED": "在沙箱环境下执行，受路径限制",
+      "DISABLED": "禁用，不允许执行"
+    },
+    "usage": "修改此文件后，重启服务即可生效。也可以通过环境变量 TOOL_POLICY_<工具名>=ALLOWED|SANDBOXED|DISABLED 来覆盖配置"
+  }
+}
