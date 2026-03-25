@@ -4,6 +4,8 @@ import { SilkColors } from '../common/Theme';
 import { User } from '../models/User';
 import { router as appRouter } from '../common/Router';
 import promptAction from '@ohos.promptAction';
+import dataPreferences from '@ohos.data.preferences';
+import common from '@ohos.app.ability.common';
 
 /**
  * 登录页面
@@ -19,6 +21,7 @@ export struct LoginPage {
   @State phoneNumber: string = '';
   @State isLoading: boolean = false;
   @State errorMessage: string = '';
+  private static readonly QUICK_LOGIN_STORE: string = 'silk_quick_login';
   private static readonly QUICK_LOGIN_USER_KEY: string = 'quickLoginUserName';
   private static readonly QUICK_LOGIN_PASS_KEY: string = 'quickLoginPassword';
 
@@ -304,26 +307,57 @@ export struct LoginPage {
     await this.handleLogin();
   }
 
-  private saveQuickLoginCredentials(): void {
+  private async saveQuickLoginCredentials(): Promise<void> {
     if (this.username.trim().length === 0 || this.password.length === 0) {
       this.showToast('请先输入用户名和密码');
       return;
     }
-    AppStorage.setOrCreate<string>(LoginPage.QUICK_LOGIN_USER_KEY, this.username.trim());
-    AppStorage.setOrCreate<string>(LoginPage.QUICK_LOGIN_PASS_KEY, this.password);
-    this.showToast('已保存一键登录凭据');
+    try {
+      const context = getContext(this) as common.UIAbilityContext;
+      const pref = await dataPreferences.getPreferences(context, LoginPage.QUICK_LOGIN_STORE);
+      await pref.put(LoginPage.QUICK_LOGIN_USER_KEY, this.username.trim());
+      await pref.put(LoginPage.QUICK_LOGIN_PASS_KEY, this.password);
+      await pref.flush();
+      // 兼容旧流程：同时写入 AppStorage（仅会话内）
+      AppStorage.setOrCreate<string>(LoginPage.QUICK_LOGIN_USER_KEY, this.username.trim());
+      AppStorage.setOrCreate<string>(LoginPage.QUICK_LOGIN_PASS_KEY, this.password);
+      this.showToast('已保存一键登录凭据');
+    } catch (error) {
+      console.error('保存一键登录失败:', error);
+      this.showToast('保存失败，请重试');
+    }
   }
 
-  private handleQuickLogin(): void {
-    const localUser = AppStorage.get<string>(LoginPage.QUICK_LOGIN_USER_KEY);
-    const localPass = AppStorage.get<string>(LoginPage.QUICK_LOGIN_PASS_KEY);
-    const username = localUser ? localUser.trim() : '';
-    const password = localPass ? localPass : '';
+  private async handleQuickLogin(): Promise<void> {
+    let username = '';
+    let password = '';
+    try {
+      const context = getContext(this) as common.UIAbilityContext;
+      const pref = await dataPreferences.getPreferences(context, LoginPage.QUICK_LOGIN_STORE);
+      const prefUser = await pref.get(LoginPage.QUICK_LOGIN_USER_KEY, '');
+      const prefPass = await pref.get(LoginPage.QUICK_LOGIN_PASS_KEY, '');
+      username = `${prefUser}`.trim();
+      password = `${prefPass}`;
+    } catch (error) {
+      console.error('读取一键登录失败:', error);
+    }
+
+    // 兼容迁移：若持久化尚无数据，尝试读取旧的 AppStorage 一次性迁移
+    if (username.length === 0 || password.length === 0) {
+      const localUser = AppStorage.get<string>(LoginPage.QUICK_LOGIN_USER_KEY);
+      const localPass = AppStorage.get<string>(LoginPage.QUICK_LOGIN_PASS_KEY);
+      username = localUser ? localUser.trim() : '';
+      password = localPass ? localPass : '';
+      if (username.length > 0 && password.length > 0) {
+        await this.saveQuickLoginCredentials();
+      }
+    }
+
     if (username.length === 0 || password.length === 0) {
       this.showToast('请先手动登录并点击“保存为一键登录”');
       return;
     }
-    this.handleLoginWithCredentials(username, password);
+    await this.handleLoginWithCredentials(username, password);
   }
 
   // 处理注册

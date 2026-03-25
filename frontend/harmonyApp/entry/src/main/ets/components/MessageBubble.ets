@@ -5,8 +5,7 @@
  */
 import { Message, MessageType, MessageCategory } from '../models/Message';
 import { Theme, SilkColors } from '../common/Theme';
-import { MarkdownLite, contentNeedsMathWebRender } from './MarkdownLite';
-import { MarkdownWeb } from './MarkdownWeb';
+import { MarkdownLite } from './MarkdownLite';
 
 @Component
 export struct MessageBubble {
@@ -54,19 +53,6 @@ export struct MessageBubble {
   private getAIPreview(): string {
     const content = this.getSafeAIContent();
     return content.length > 220 ? `${content.substring(0, 220)}...` : content;
-  }
-
-  private estimateAiWebHeight(content: string): number {
-    const source = content ? content : '';
-    const lines = source.split('\n').length;
-    let height = 140 + Math.floor(source.length / 4) + lines * 14;
-    if (height < 160) {
-      height = 160;
-    }
-    if (height > 880) {
-      height = 880;
-    }
-    return height;
   }
 
   private canShowAIActions(): boolean {
@@ -133,16 +119,9 @@ export struct MessageBubble {
         Blank().height(10)
 
         if (this.isAIExpanded || !this.isLongAIContent()) {
-          if (contentNeedsMathWebRender(this.getSafeAIContent())) {
-            MarkdownWeb({
-              content: this.getSafeAIContent(),
-              webHeight: this.estimateAiWebHeight(this.getSafeAIContent())
-            })
-          } else {
-            MarkdownLite({
-              content: this.getSafeAIContent()
-            })
-          }
+          MarkdownLite({
+            content: this.getSafeAIContent()
+          })
         } else {
           Text(this.getAIPreview())
             .fontSize(14)

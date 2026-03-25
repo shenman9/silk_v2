@@ -29,12 +29,6 @@ Render chat Markdown with high stability on HarmonyOS, prioritizing crash resist
 - Keep long content expandable to reduce layout pressure.
 - Treat WebView + remote CDN renderers as fallback only.
 
-## Hybrid Math (Optional)
-When content includes KaTeX delimiters (`$$`, `$...$`, `\\(`, `\\[`), route that message through `MarkdownWeb` only for those payloads. Keep default AI text on `MarkdownLite` to limit WebView surface area and crash risk.
-
-## Quote Layout
-Merge consecutive `>` lines into a single block so each paragraph is one card, not one tall row per line. Avoid `height('100%')` decorative bars beside `Text`; prefer left `border` on the `Text` container.
-
 ## Integration Checklist
 - [ ] Markdown renderer is pure ArkUI by default
 - [ ] AI message path does not reintroduce past crash points

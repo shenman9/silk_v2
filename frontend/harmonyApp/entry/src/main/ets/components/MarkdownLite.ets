@@ -5,29 +5,10 @@
 import { Theme } from '../common/Theme';
 
 interface MarkdownBlock {
-  kind: string; // heading | bullet | ordered | quote | code | divider | text | empty
+  kind: string; // heading | bullet | ordered | quote | code | divider | text | empty | task | table
   text: string;
   level: number;
-}
-
-/**
- * 检测内容是否包含需 KaTeX/Web 渲染的数学公式（与 MarkdownWeb 搭配使用）。
- */
-export function contentNeedsMathWebRender(content: string): boolean {
-  const s = content ? content : '';
-  if (s.indexOf('$$') >= 0) {
-    return true;
-  }
-  if (s.indexOf('\\[') >= 0 || s.indexOf('\\(') >= 0) {
-    return true;
-  }
-  let dollarCount = 0;
-  for (let i = 0; i < s.length; i++) {
-    if (s[i] === '$') {
-      dollarCount++;
-    }
-  }
-  return dollarCount >= 2;
+  marker: string;
 }
 
 @Component
@@ -46,7 +27,7 @@ export struct MarkdownLite {
       const trimmed = line.trim();
       if (trimmed.startsWith('```')) {
         if (inCodeBlock) {
-          blocks.push({ kind: 'code', text: codeBuffer, level: 0 });
+          blocks.push({ kind: 'code', text: codeBuffer, level: 0, marker: '' });
           codeBuffer = '';
           inCodeBlock = false;
         } else {
@@ -64,10 +45,7 @@ export struct MarkdownLite {
       }
 
       if (trimmed.length === 0) {
-        if (blocks.length > 0 && blocks[blocks.length - 1].kind === 'empty') {
-          continue;
-        }
-        blocks.push({ kind: 'empty', text: '', level: 0 });
+        blocks.push({ kind: 'empty', text: '', level: 0, marker: '' });
         continue;
       }
 
@@ -75,47 +53,88 @@ export struct MarkdownLite {
       if (headingMatch) {
         const marks = headingMatch[1];
         const title = headingMatch[2];
-        blocks.push({ kind: 'heading', text: this.cleanInlineMarkdown(title), level: marks.length });
+        blocks.push({ kind: 'heading', text: this.cleanInlineMarkdown(title), level: marks.length, marker: '' });
         continue;
       }
 
       if (trimmed.match(/^(-{3,}|\*{3,}|_{3,})$/)) {
-        blocks.push({ kind: 'divider', text: '', level: 0 });
+        blocks.push({ kind: 'divider', text: '', level: 0, marker: '' });
         continue;
       }
 
-      const quoteMatch = trimmed.match(/^>\s?(.*)$/);
+      const quoteMatch = trimmed.match(/^((>\s*)+)(.*)$/);
       if (quoteMatch) {
-        const quoteText = quoteMatch[1] ? quoteMatch[1] : '';
-        const cleaned = this.cleanInlineMarkdown(quoteText);
-        if (blocks.length > 0 && blocks[blocks.length - 1].kind === 'quote') {
-          const last = blocks[blocks.length - 1];
-          last.text = last.text + '\n' + cleaned;
+        const prefix = quoteMatch[1] ? quoteMatch[1] : '>';
+        const quoteLevel = prefix.replace(/[^>]/g, '').length;
+        const quoteText = quoteMatch[3] ? quoteMatch[3].trim() : '';
+        const normalizedLevel = quoteLevel > 0 ? quoteLevel : 1;
+        const cleanedQuote = this.cleanInlineMarkdown(quoteText);
+        const lastIndex = blocks.length - 1;
+        if (lastIndex >= 0 && blocks[lastIndex].kind === 'quote') {
+          const lastBlock = blocks[lastIndex];
+          if (cleanedQuote.length > 0) {
+            if (lastBlock.text.length > 0) {
+              lastBlock.text += '\n';
+            }
+            lastBlock.text += cleanedQuote;
+          }
+          if (normalizedLevel > lastBlock.level) {
+            lastBlock.level = normalizedLevel;
+          }
         } else {
-          blocks.push({ kind: 'quote', text: cleaned, level: 0 });
+          blocks.push({
+            kind: 'quote',
+            text: cleanedQuote,
+            level: normalizedLevel,
+            marker: ''
+          });
         }
+        continue;
+      }
+
+      const taskMatch = trimmed.match(/^[-*+]\s+\[([ xX])\]\s+(.+)$/);
+      if (taskMatch) {
+        const checked = taskMatch[1].toLowerCase() === 'x';
+        const itemText = taskMatch[2];
+        blocks.push({
+          kind: 'task',
+          text: this.cleanInlineMarkdown(itemText),
+          level: 0,
+          marker: checked ? '☑' : '☐'
+        });
         continue;
       }
 
       const bulletMatch = trimmed.match(/^[-*+]\s+(.+)$/);
       if (bulletMatch) {
         const itemText = bulletMatch[1];
-        blocks.push({ kind: 'bullet', text: this.cleanInlineMarkdown(itemText), level: 0 });
+        blocks.push({ kind: 'bullet', text: this.cleanInlineMarkdown(itemText), level: 0, marker: '•' });
         continue;
       }
 
       const orderedMatch = trimmed.match(/^(\d+)\.\s+(.+)$/);
       if (orderedMatch) {
-        const orderedText = `${orderedMatch[1]}. ${orderedMatch[2]}`;
-        blocks.push({ kind: 'ordered', text: this.cleanInlineMarkdown(orderedText), level: 0 });
+        blocks.push({
+          kind: 'ordered',
+          text: this.cleanInlineMarkdown(orderedMatch[2]),
+          level: 0,
+          marker: `${orderedMatch[1]}.`
+        });
         continue;
       }
 
-      blocks.push({ kind: 'text', text: this.cleanInlineMarkdown(line), level: 0 });
+      const tableMatch = trimmed.match(/^\|(.+)\|$/);
+      if (tableMatch) {
+        const row = tableMatch[1].split('|').map((part: string) => part.trim()).join(' | ');
+        blocks.push({ kind: 'table', text: row, level: 0, marker: '' });
+        continue;
+      }
+
+      blocks.push({ kind: 'text', text: this.cleanInlineMarkdown(line), level: 0, marker: '' });
     }
 
     if (inCodeBlock && codeBuffer.length > 0) {
-      blocks.push({ kind: 'code', text: codeBuffer, level: 0 });
+      blocks.push({ kind: 'code', text: codeBuffer, level: 0, marker: '' });
     }
 
     return blocks;
@@ -124,7 +143,7 @@ export struct MarkdownLite {
   private cleanInlineMarkdown(text: string): string {
     let cleaned = text ? text : '';
     cleaned = cleaned.replace(/!\[([^\]]*)\]\([^)]+\)/g, '[图片]');
-    cleaned = cleaned.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1');
+    cleaned = cleaned.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1 ($2)');
     cleaned = cleaned.replace(/\*\*(.*?)\*\*/g, '$1');
     cleaned = cleaned.replace(/__(.*?)__/g, '$1');
     cleaned = cleaned.replace(/\*(.*?)\*/g, '$1');
@@ -146,10 +165,28 @@ export struct MarkdownLite {
     return 15;
   }
 
+  private quoteLeftPadding(level: number): number {
+    if (level <= 1) {
+      return 2;
+    }
+    const value = 2 + (level - 1) * 2;
+    return value > 8 ? 8 : value;
+  }
+
+  private quotePrefix(level: number): string {
+    if (level <= 1) {
+      return '> ';
+    }
+    if (level === 2) {
+      return '>> ';
+    }
+    return '>>> ';
+  }
+
   @Builder
   private renderBlock(block: MarkdownBlock) {
     if (block.kind === 'empty') {
-      Blank().height(4);
+      Blank().height(8);
     } else if (block.kind === 'divider') {
       Row()
         .width('100%')
@@ -164,16 +201,18 @@ export struct MarkdownLite {
         .lineHeight(24)
         .margin({ top: 4, bottom: 2 });
     } else if (block.kind === 'quote') {
-      Text(block.text)
+      Text(`${this.quotePrefix(block.level)}${block.text}`)
         .width('100%')
-        .fontSize(14)
-        .fontColor(Theme.colors.textSecondary)
-        .lineHeight(22)
-        .padding({ left: 10, top: 6, bottom: 6, right: 8 })
-        .border({ width: { left: 3 }, color: '#BFA16A' })
-        .backgroundColor('#0FBFA16A')
-        .borderRadius(6)
-        .margin({ top: 2, bottom: 2 });
+        .fontSize(13)
+        .fontColor('#6B7280')
+        .lineHeight(18)
+        .padding({
+          left: this.quoteLeftPadding(block.level),
+          right: 2,
+          top: 1,
+          bottom: 1
+        })
+        .margin({ top: 0, bottom: 0 });
     } else if (block.kind === 'code') {
       Text(block.text)
         .width('100%')
@@ -187,7 +226,7 @@ export struct MarkdownLite {
         .margin({ top: 2, bottom: 2 });
     } else if (block.kind === 'bullet') {
       Row() {
-        Text('• ')
+        Text(`${block.marker} `)
           .fontSize(14)
           .fontColor('#BFA16A')
           .margin({ top: 1 });
@@ -199,11 +238,44 @@ export struct MarkdownLite {
       }
       .width('100%')
       .margin({ top: 1, bottom: 1 });
+    } else if (block.kind === 'task') {
+      Row() {
+        Text(`${block.marker} `)
+          .fontSize(14)
+          .fontColor(block.marker === '☑' ? '#4D9A63' : Theme.colors.textLight)
+          .margin({ top: 1 });
+        Text(block.text)
+          .layoutWeight(1)
+          .fontSize(14)
+          .fontColor(Theme.colors.textPrimary)
+          .lineHeight(22)
+      }
+      .width('100%')
+      .margin({ top: 1, bottom: 1 });
     } else if (block.kind === 'ordered') {
+      Row() {
+        Text(`${block.marker} `)
+          .fontSize(14)
+          .fontColor('#BFA16A')
+          .margin({ top: 1 });
+        Text(block.text)
+          .layoutWeight(1)
+          .fontSize(14)
+          .fontColor(Theme.colors.textPrimary)
+          .lineHeight(22)
+      }
+      .width('100%')
+      .margin({ top: 1, bottom: 1 });
+    } else if (block.kind === 'table') {
       Text(block.text)
-        .fontSize(14)
-        .fontColor(Theme.colors.textPrimary)
-        .lineHeight(22)
+        .width('100%')
+        .fontSize(13)
+        .fontColor('#334155')
+        .fontFamily('monospace')
+        .lineHeight(20)
+        .padding({ left: 8, right: 8, top: 6, bottom: 6 })
+        .backgroundColor('#EEF2F7')
+        .borderRadius(6)
         .margin({ top: 1, bottom: 1 });
     } else {
       Text(block.text)
