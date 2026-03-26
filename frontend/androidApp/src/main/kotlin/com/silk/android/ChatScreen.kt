@@ -61,6 +61,7 @@ import com.silk.shared.ChatClient
 import com.silk.shared.ConnectionState
 import com.silk.shared.models.Message
 import com.silk.shared.models.MessageType
+import com.silk.shared.utils.formatMessageTimestamp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -642,9 +643,10 @@ fun ChatScreen(appState: AppState) {
                                         .filter { selectedMessages.contains(it.id) }
                                         .sortedBy { it.timestamp }
                                         .joinToString("\n\n") { msg ->
-                                            val time = SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).apply {
-                                                timeZone = java.util.TimeZone.getTimeZone("Asia/Shanghai")
-                                            }.format(java.util.Date(msg.timestamp))
+                                            val time = formatMessageTimestamp(
+                                                timestamp = msg.timestamp,
+                                                includeSeconds = false
+                                            )
                                             "[$time] ${msg.userName}:\n${msg.content}"
                                         }
                                     
@@ -1065,12 +1067,19 @@ fun ChatScreen(appState: AppState) {
                         val isSilkPrivateChat = group.name.startsWith("[Silk]")
                         if (!isSilkPrivateChat) {
                             Surface(
-                                onClick = { 
-                                    val text = "@Silk "
-                                    messageText = TextFieldValue(
-                                        text = text,
-                                        selection = TextRange(text.length)  // 光标移动到末尾
-                                    )
+                                onClick = {
+                                    val prefix = "@Silk "
+                                    if (!messageText.text.startsWith(prefix)) {
+                                        val newText = prefix + messageText.text
+                                        val newSelection = TextRange(
+                                            start = (messageText.selection.start + prefix.length).coerceIn(0, newText.length),
+                                            end = (messageText.selection.end + prefix.length).coerceIn(0, newText.length)
+                                        )
+                                        messageText = messageText.copy(
+                                            text = newText,
+                                            selection = newSelection
+                                        )
+                                    }
                                 },
                                 color = SilkColors.primary.copy(alpha = 0.15f),
                                 shape = MaterialTheme.shapes.small
@@ -1593,9 +1602,10 @@ fun ChatScreen(appState: AppState) {
                     forwardResult = null
                     val selectedContent = messagesToForward
                         .joinToString("\n\n") { msg ->
-                            val time = SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).apply {
-                                timeZone = java.util.TimeZone.getTimeZone("Asia/Shanghai")
-                            }.format(java.util.Date(msg.timestamp))
+                            val time = formatMessageTimestamp(
+                                timestamp = msg.timestamp,
+                                includeSeconds = false
+                            )
                             "[$time] ${msg.userName}: ${msg.content}"
                         }
                     
@@ -1653,9 +1663,10 @@ fun ChatScreen(appState: AppState) {
                             .filter { selectedMessages.contains(it.id) }
                             .sortedBy { it.timestamp }
                             .joinToString("\n\n") { msg ->
-                                val time = SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).apply {
-                                    timeZone = java.util.TimeZone.getTimeZone("Asia/Shanghai")
-                                }.format(java.util.Date(msg.timestamp))
+                                val time = formatMessageTimestamp(
+                                    timestamp = msg.timestamp,
+                                    includeSeconds = false
+                                )
                                 "[$time] ${msg.userName}: ${msg.content}"
                             }
                         
@@ -2956,10 +2967,7 @@ fun MessageItem(
                     !isSystemMessage && 
                     !isTransient
     
-    val dateFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).apply {
-        timeZone = java.util.TimeZone.getTimeZone("Asia/Shanghai")
-    }
-    val timeString = dateFormat.format(Date(message.timestamp))
+    val timeString = formatMessageTimestamp(message.timestamp)
     
     // 检测PDF下载链接
     val isPdfMessage = message.content.contains("/download/report/") && message.content.contains(".pdf")
