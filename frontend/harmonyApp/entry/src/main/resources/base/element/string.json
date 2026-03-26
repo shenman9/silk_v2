@@ -175,6 +175,14 @@
     {
       "name": "settings_title",
       "value": "Settings"
+    },
+    {
+      "name": "calendar_read_reason",
+      "value": "Silk needs to read calendar to manage alarm reminders"
+    },
+    {
+      "name": "calendar_write_reason",
+      "value": "Silk needs to write calendar to set alarm reminders"
     }
   ]
 }
