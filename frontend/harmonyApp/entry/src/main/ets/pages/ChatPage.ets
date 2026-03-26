@@ -13,6 +13,7 @@ import { router as appRouter } from '../common/Router';
 import { apiClient as globalApiClient } from '../api/ApiClient';
 import pasteboard from '@ohos.pasteboard';
 import promptAction from '@ohos.promptAction';
+import { AlarmService } from '../common/AlarmService';
 
 @Component
 export struct ChatPage {
@@ -185,6 +186,13 @@ export struct ChatPage {
         this.setMessageStatus(sentMessage.id, 'sent');
       }
     }, 1200);
+
+    // 闹钟设定检测
+    if (content.includes('设定闹钟')) {
+      AlarmService.setAlarm(14, 0).then((result) => {
+        this.showToast(result.message);
+      });
+    }
   }
 
   private getMessageStatus(messageId: string): string {

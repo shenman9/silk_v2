@@ -101,3 +101,9 @@ frontend/harmonyApp/oh_modules/
 
 # Agent / IDE session artifacts (not source)
 tmp/
+
+# Claude Code
+.claude/
+
+# HarmonyApp local config (auto-generated from .env)
+frontend/harmonyApp/entry/src/main/ets/common/EnvConfig.ets

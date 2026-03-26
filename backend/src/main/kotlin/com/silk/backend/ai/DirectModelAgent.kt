@@ -48,8 +48,8 @@ class DirectModelAgent(
     // 对话历史（保持上下文）
     private val conversationHistory = mutableListOf<Message>()
     
-    // Weaviate 搜索客户端（用于搜索已上传的 PDF 等文件）
-    private val weaviateClient = WeaviateClient(AIConfig.requireWeaviateUrl())
+    // Weaviate 搜索客户端（用于搜索已上传的 PDF 等文件），未配置时为 null
+    private val weaviateClient: WeaviateClient? = AIConfig.WEAVIATE_URL.takeIf { it.isNotBlank() }?.let { WeaviateClient(it) }
     
     // 群聊历史记录（用于统计成员发言等）
     private var groupChatHistory: List<com.silk.backend.models.ChatHistoryEntry> = emptyList()
@@ -1277,9 +1277,13 @@ class DirectModelAgent(
             }
 
             logger.info("🔍 [Weaviate] 搜索上下文: $query (userId=$requestUserId, sessions=${accessibleSessionIds.size})")
-            
+
+            if (weaviateClient == null) {
+                return "⚠️ Weaviate 未配置，请在 .env 中设置 WEAVIATE_URL"
+            }
+
             // 使用 runBlocking 调用 suspend 函数
-            val ready = runBlocking { weaviateClient.isReady() }
+            val ready = runBlocking { weaviateClient!!.isReady() }
             if (!ready) {
                 return "⚠️ Weaviate 搜索服务不可用，请确保 Weaviate 已启动"
             }
@@ -1292,7 +1296,7 @@ class DirectModelAgent(
                     if (docs.size >= perQueryLimit) break
 
                     val result = runBlocking {
-                        weaviateClient.isolatedSearch(
+                        weaviateClient!!.isolatedSearch(
                             query = searchQuery,
                             userId = requestUserId,
                             currentSessionId = sid,
