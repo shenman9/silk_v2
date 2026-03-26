@@ -2627,6 +2627,51 @@ private fun escapeHtml(raw: String): String {
         .replace("'", "&#39;")
 }
 
+private data class MathDelimiter(
+    val open: String,
+    val close: String
+)
+
+private val mathDelimiters = listOf(
+    MathDelimiter("$$", "$$"),
+    MathDelimiter("\\[", "\\]"),
+    MathDelimiter("\\(", "\\)")
+)
+
+private fun normalizeMathBlocks(markdown: String): String {
+    val output = StringBuilder()
+    var cursor = 0
+
+    while (cursor < markdown.length) {
+        var matched = false
+
+        for (delimiter in mathDelimiters) {
+            if (!markdown.startsWith(delimiter.open, cursor)) continue
+
+            val contentStart = cursor + delimiter.open.length
+            val closingIndex = markdown.indexOf(delimiter.close, contentStart)
+            if (closingIndex == -1) continue
+
+            val innerContent = markdown.substring(contentStart, closingIndex)
+                // markdown-it 会把数学环境中的 `\\` 吃成 `\`，这里先补一层转义。
+                .replace("\\\\", "\\\\\\\\")
+            output.append(delimiter.open)
+            output.append(innerContent)
+            output.append(delimiter.close)
+            cursor = closingIndex + delimiter.close.length
+            matched = true
+            break
+        }
+
+        if (!matched) {
+            output.append(markdown[cursor])
+            cursor += 1
+        }
+    }
+
+    return output.toString()
+}
+
 private fun highlightCode(code: String, language: String): String {
     val normalizedLanguage = language
         .trim()
@@ -2719,7 +2764,10 @@ fun MarkdownContent(content: String) {
     val markdownEngine = rememberMarkdownEngine()
     val containerId = remember { "silk-markdown-${Random.nextInt(1_000_000)}" }
     val safeHtml = remember(content) {
-        DOMPurify.sanitize(markdownEngine.render(content), createSanitizeConfig())
+        DOMPurify.sanitize(
+            markdownEngine.render(normalizeMathBlocks(content)),
+            createSanitizeConfig()
+        )
     }
 
     Div({
