@@ -6,7 +6,7 @@ import { router as appRouter } from '../common/Router';
 
 @Component
 export struct SettingsPage {
-  @State appStore: AppStore = globalAppStore;
+  private readonly appStore: AppStore = globalAppStore;
   @State isLoading: boolean = false;
   @State defaultAgentInstruction: string = '';
   @State language: Language = Language.CHINESE;
@@ -178,7 +178,7 @@ export struct SettingsPage {
         .width('100%')
         .margin({ bottom: 8 })
 
-      TextArea({ placeholder: '输入 AI 默认指令...', text: $$defaultAgentInstruction })
+      TextArea({ placeholder: '输入 AI 默认指令...', text: this.defaultAgentInstruction })
         .width('100%')
         .height(120)
         .fontSize(14)
