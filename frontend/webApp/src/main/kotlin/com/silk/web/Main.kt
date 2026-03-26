@@ -12,6 +12,7 @@ import com.silk.shared.models.UserSettings
 import kotlinx.coroutines.launch
 import kotlinx.browser.window
 import kotlinx.browser.document
+import kotlin.js.Date
 import kotlin.random.Random
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -19,8 +20,6 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 import org.w3c.dom.HTMLAnchorElement
 import org.w3c.dom.HTMLElement
-
-// 时间格式化函数在文件后面定义
 
 // 文件信息数据类
 data class FileInfo(
@@ -2965,7 +2964,7 @@ fun MessageItem(
     onForward: (Message) -> Unit = {}
 ) {
     val timeString = remember(message.timestamp) {
-        formatTime(message.timestamp)
+        formatMessageTimestampForWeb(message.timestamp)
     }
     
     // 是否是 AI 消息
@@ -3408,7 +3407,7 @@ fun MessageItem(
 fun TransientMessageItem(message: Message) {
     // 临时消息：丝滑风格 + 进度条动画
     val timeString = remember(message.timestamp) {
-        formatTime(message.timestamp)
+        formatMessageTimestampForWeb(message.timestamp)
     }
     
     // 循环进度动画状态
@@ -3503,24 +3502,65 @@ fun generateRandomId(): String {
         .joinToString("")
 }
 
-/**
- * 格式化时间戳为 HH:mm:ss 格式（上海时区 UTC+8）
- * 时间戳是UTC毫秒数，转换为上海时区需要加8小时偏移
- * @param timestamp 毫秒级时间戳
- * @return 格式化后的时间字符串
- */
-fun formatTime(timestamp: Long): String {
-    // 时间戳是UTC时间，转换为上海时区（UTC+8）
-    val shanghaiOffsetMs = 8 * 60 * 60 * 1000L // 8小时的毫秒数
-    val shanghaiTime = timestamp + shanghaiOffsetMs
-    
-    val totalSeconds = (shanghaiTime / 1000).toInt()
-    val hours = (totalSeconds / 3600) % 24
-    val minutes = (totalSeconds % 3600) / 60
-    val seconds = totalSeconds % 60
-    
-    return "${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}"
+private fun formatMessageTimestampForWeb(
+    timestamp: Long,
+    referenceTimestamp: Long = Date.now().toLong(),
+    includeSeconds: Boolean = true
+): String {
+    if (timestamp <= 0L) return ""
+
+    val messageDate = shanghaiDate(timestamp)
+    val referenceDate = shanghaiDate(referenceTimestamp)
+
+    val timePart = buildString {
+        append(messageDate.hours.twoDigits())
+        append(":")
+        append(messageDate.minutes.twoDigits())
+        if (includeSeconds) {
+            append(":")
+            append(messageDate.seconds.twoDigits())
+        }
+    }
+
+    if (
+        messageDate.year == referenceDate.year &&
+        messageDate.month == referenceDate.month &&
+        messageDate.day == referenceDate.day
+    ) {
+        return timePart
+    }
+
+    val datePart = if (messageDate.year == referenceDate.year) {
+        "${messageDate.month.twoDigits()}-${messageDate.day.twoDigits()}"
+    } else {
+        "${messageDate.year}-${messageDate.month.twoDigits()}-${messageDate.day.twoDigits()}"
+    }
+
+    return "$datePart $timePart"
 }
+
+private data class ShanghaiDateParts(
+    val year: Int,
+    val month: Int,
+    val day: Int,
+    val hours: Int,
+    val minutes: Int,
+    val seconds: Int
+)
+
+private fun shanghaiDate(timestamp: Long): ShanghaiDateParts {
+    val shanghaiTime = Date(timestamp.toDouble() + 8 * 60 * 60 * 1000)
+    return ShanghaiDateParts(
+        year = shanghaiTime.getUTCFullYear(),
+        month = shanghaiTime.getUTCMonth() + 1,
+        day = shanghaiTime.getUTCDate(),
+        hours = shanghaiTime.getUTCHours(),
+        minutes = shanghaiTime.getUTCMinutes(),
+        seconds = shanghaiTime.getUTCSeconds()
+    )
+}
+
+private fun Int.twoDigits(): String = toString().padStart(2, '0')
 
 private fun isLikelyAgentStatusContent(content: String): Boolean {
     val text = content.trim()
