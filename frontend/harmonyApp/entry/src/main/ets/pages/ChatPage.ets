@@ -14,7 +14,7 @@ import { router as appRouter } from '../common/Router';
 import { apiClient as globalApiClient } from '../api/ApiClient';
 import pasteboard from '@ohos.pasteboard';
 import promptAction from '@ohos.promptAction';
-import { AlarmService } from '../common/AlarmService';
+import { AlarmService, AlarmResult } from '../common/AlarmService';
 import { parseAlarmTimeFromText } from '../common/TodoTimeParser';
 
 @Component
@@ -37,6 +37,7 @@ export struct ChatPage {
   @State private isRecalling: boolean = false;
   @State private todoItems: UserTodoItem[] = [];
   @State private todoRefreshing: boolean = false;
+  @State private executingTodoIds: Record<string, boolean> = {};
 
   private groupId: string = 'default_room';
   private userId: string = '';
@@ -662,31 +663,76 @@ export struct ChatPage {
     return parseAlarmTimeFromText(blob) === null;
   }
 
+  private isTodoExecuting(item: UserTodoItem): boolean {
+    return this.executingTodoIds[item.id] === true;
+  }
+
   private async runTodoMainAction(item: UserTodoItem): Promise<void> {
     if (item.done) {
       this.showToast('已完成项可在左侧勾选取消');
       return;
     }
+    if (this.isTodoExecuting(item)) {
+      this.showToast('正在执行中，请稍候');
+      return;
+    }
     const at = (item.actionType ? item.actionType : 'none').toLowerCase();
     const blob = `${item.actionDetail ? item.actionDetail : ''} ${item.title}`;
     const parsed = parseAlarmTimeFromText(blob);
+    let res: AlarmResult | null = null;
     if (at === 'alarm') {
       if (!parsed) {
-        this.showToast('无法解析时间，请确保有待办或详情中含如 7点、07:00');
+        this.showToast('无法解析时间，标题或详情需含如 7点、07:00');
         return;
       }
-      const res = await AlarmService.setAlarmForTodo(parsed.hour, parsed.minute, item.title);
-      this.showToast(res.message);
-      return;
-    }
-    if (at === 'calendar') {
+      res = await this.executeWithLoading(item.id, async (): Promise<AlarmResult> => {
+        return await AlarmService.setAlarmForTodo(parsed!.hour, parsed!.minute, item.title);
+      });
+    } else if (at === 'calendar') {
       if (!parsed) {
         this.showToast('无法解析日程时间');
         return;
       }
-      const res = await AlarmService.setCalendarOnlyForTodo(parsed.hour, parsed.minute, item.title);
-      this.showToast(res.message);
+      res = await this.executeWithLoading(item.id, async (): Promise<AlarmResult> => {
+        return await AlarmService.setCalendarOnlyForTodo(parsed!.hour, parsed!.minute, item.title);
+      });
+    } else {
       return;
+    }
+    if (!res) {
+      return;
+    }
+    if (res.success) {
+      this.showToast(res.message);
+      void this.runToggleTodo(item);
+    } else {
+      this.showToast(`执行失败: ${res.message}`);
+    }
+  }
+
+  private async executeWithLoading(todoId: string, action: () => Promise<AlarmResult>): Promise<AlarmResult | null> {
+    const nextExecuting: Record<string, boolean> = {};
+    const keys: string[] = Object.keys(this.executingTodoIds);
+    for (let i = 0; i < keys.length; i++) {
+      nextExecuting[keys[i]] = this.executingTodoIds[keys[i]];
+    }
+    nextExecuting[todoId] = true;
+    this.executingTodoIds = nextExecuting;
+    try {
+      return await action();
+    } catch (error) {
+      const errMsg = error instanceof Error ? error.message : '未知错误';
+      this.showToast(`执行异常: ${errMsg}`);
+      return null;
+    } finally {
+      const clearExecuting: Record<string, boolean> = {};
+      const clearKeys: string[] = Object.keys(this.executingTodoIds);
+      for (let i = 0; i < clearKeys.length; i++) {
+        if (clearKeys[i] !== todoId) {
+          clearExecuting[clearKeys[i]] = this.executingTodoIds[clearKeys[i]];
+        }
+      }
+      this.executingTodoIds = clearExecuting;
     }
   }
 
@@ -1001,7 +1047,7 @@ export struct ChatPage {
       .width('100%')
       .margin({ bottom: 12 })
 
-      Text('从聊天整理为一事一条。左侧勾选完成；闹钟/日程且时间可识别时右侧点「执行」调用系统能力。')
+      Text('一事一条待办。可运行项右侧显示「▶ 运行」，点击自动调用系统能力并标记完成。')
         .fontSize(12)
         .fontColor(SilkColors.textSecondary)
         .margin({ bottom: 12 })
@@ -1032,9 +1078,9 @@ export struct ChatPage {
                     .textOverflow({ overflow: TextOverflow.Ellipsis })
 
                   if (this.todoNeedsTimeHint(item)) {
-                    Text('时间未识别，标题或详情需含如 7点、07:00')
+                    Text('缺时间信息，标题需含如 7点、07:00')
                       .fontSize(11)
-                      .fontColor(SilkColors.textSecondary)
+                      .fontColor('#D48806')
                       .margin({ top: 4 })
                   }
 
@@ -1049,16 +1095,23 @@ export struct ChatPage {
                 .alignItems(HorizontalAlign.Start)
 
                 if (this.todoCanExecute(item)) {
-                  Button('执行')
-                    .height(32)
-                    .fontSize(13)
-                    .padding({ left: 12, right: 12 })
-                    .backgroundColor(SilkColors.primary)
-                    .fontColor(SilkColors.onPrimary)
-                    .borderRadius(8)
-                    .onClick((): void => {
-                      void this.runTodoMainAction(item);
-                    })
+                  if (this.isTodoExecuting(item)) {
+                    LoadingProgress()
+                      .width(32)
+                      .height(32)
+                      .color(SilkColors.onPrimary)
+                  } else {
+                    Button('▶ 运行')
+                      .height(32)
+                      .fontSize(13)
+                      .padding({ left: 12, right: 12 })
+                      .backgroundColor(SilkColors.primary)
+                      .fontColor(SilkColors.onPrimary)
+                      .borderRadius(8)
+                      .onClick((): void => {
+                        void this.runTodoMainAction(item);
+                      })
+                  }
                 }
               }
               .width('100%')

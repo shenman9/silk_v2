@@ -121,21 +121,20 @@ object GroupTodoExtractionService {
 
         val system = """你是「真人待办」整理助手。输入为多群聊天节选，格式为 [发送者]: 内容。
 
-核心原则：
+核心原则（严格执行）：
+- **一事一条**：同一个意图/事项在整个对话中只输出一条待办，禁止任何形式的重复。
 - 只为人（真实用户）需要落实的「一件事」各写一条待办；不要把 AI 助手（如 Silk、🤖）的寒暄、泛泛解释、长篇回复拆成多条待办。
 - **禁止**把助手回复里的建议列表、客套话、「好的我可以帮你」等整段当成待办；除非聊天里**明确**出现了用户要执行的具体动作。
-- 同一件事合并成一条 title（例如用户说「提醒我七点起床」→ title 类似「设置闹钟：七点起床」一条即可，不要复制 AI 的整段分析）。
-- title 用简短可执行中文，一条一行，最好在 40 字内；**禁止**把多句话、列表、段落原样粘贴进一条 title；冗长内容必须压缩成一条短句（一事一条）。
-- 在输出前自行合并**近似重复**的意图（同一用户同一跟进事项只留一条），不要输出多条仅措辞不同的重复待办。
+- 同一件事合并成一条 title（例如用户说「提醒我七点起床」→ title="7点起床闹钟" 一条即可，去掉"设置闹钟""提醒我"等套话前缀）。
+- title 用简短可执行中文，10-30 字为佳；**禁止**把多句话、列表、段落原样粘贴进一条 title。
+- 输出前必须逐条检查：删除任何两条之间仅有措辞差异、语义实质相同的待办。
 
-actionType / actionDetail（可选，便于手机调系统能力）：
-- 用户明确要闹钟/叫醒/几点起：actionType="alarm"，actionDetail 填 24 小时制时间如 "07:00"（能从聊天推断则填，否则可省略）。
-- 要日程/会议时间点：actionType="calendar"，actionDetail 填 "YYYY-MM-DD HH:mm" 或 "明天 15:00" 等可解析片段。
+actionType / actionDetail（能填就填，影响手机端是否显示「运行」按钮）：
+- 用户要闹钟/叫醒/起床：actionType="alarm"，actionDetail **必须**填 24 小时制时间如 "07:00" 或 "19:30"（从聊天推断具体时间）。
+- 要日程/会议：actionType="calendar"，actionDetail **必须**填 "YYYY-MM-DD HH:mm" 或 "明天 15:00" 等含时间的可解析片段。
 - 普通事务：actionType="none" 或省略。
 
-输出 todos 条数应尽量少：**同一意图整段对话里只保留一条**，禁止同一意思换表述写多条。
-**硬性上限：todos 数组最多 $MAX_TODOS_PER_REFRESH 条**；若聊天里可跟进事项更多，只输出最重要的 $MAX_TODOS_PER_REFRESH 条，其余舍弃。
-
+**硬性上限：todos 数组最多 $MAX_TODOS_PER_REFRESH 条**；宁可少输出也不要重复。
 输出：仅一段 JSON，无 Markdown。
 格式：{"todos":[{"title":"...","actionType":"alarm","actionDetail":"07:00","sourceGroupId":"可省略","sourceGroupName":"可省略"}]}"""
 
@@ -424,20 +423,37 @@ actionType / actionDetail（可选，便于手机调系统能力）：
         return dedupeDrafts(out)
     }
 
-    /** 非常粗的本地时间提取（7点、07:30）；失败返回 null */
+    /** 本地时间提取：支持中文数字（七点、十点半）和阿拉伯数字（07:30） */
     private fun extractRoughHourMinute(text: String): Pair<Int, Int>? {
         val t = text.trim()
+        val pm = t.contains("下午") || t.contains("晚上") || t.contains("傍晚")
+        // Chinese numeral + 点
+        val cnHalf = Regex("([一二三四五六七八九十两零]+点半)").find(t)
+        if (cnHalf != null) {
+            val cn = cnHalf.groupValues[1].replace("点半", "")
+            val h = parseCnHourSimple(cn) ?: return null
+            val hour = if (pm && h in 1..11) h + 12 else h
+            if (hour in 0..23) return hour to 30
+        }
+        val cnExact = Regex("([一二三四五六七八九十两零]+点)").find(t)
+        if (cnExact != null) {
+            val cn = cnExact.groupValues[1].replace("点", "")
+            val h = parseCnHourSimple(cn) ?: return null
+            val hour = if (pm && h in 1..11) h + 12 else h
+            if (hour in 0..23) return hour to 0
+        }
+        // Arabic HH:mm
         val hm = Regex("""(\d{1,2})\s*[:：]\s*(\d{2})""").find(t)
         if (hm != null) {
             val h = hm.groupValues[1].toIntOrNull() ?: return null
             val m = hm.groupValues[2].toIntOrNull() ?: return null
             if (h in 0..23 && m in 0..59) return h to m
         }
+        // Arabic 点
         val hOnly = Regex("""(\d{1,2})\s*点""").find(t)
         if (hOnly != null) {
             val h = hOnly.groupValues[1].toIntOrNull() ?: return null
             var hour = h
-            val pm = t.contains("下午") || t.contains("晚上") || t.contains("傍晚")
             if (pm) {
                 if (h in 1..11) hour = h + 12
                 else if (h == 12) hour = 12
@@ -449,6 +465,20 @@ actionType / actionDetail（可选，便于手机调系统能力）：
         return null
     }
 
+    private fun parseCnHourSimple(cn: String): Int? {
+        val map = mapOf('一' to 1,'二' to 2,'三' to 3,'四' to 4,'五' to 5,'六' to 6,'七' to 7,'八' to 8,'九' to 9,'十' to 10,'两' to 2,'零' to 0)
+        if (cn.length == 1) return map[cn.single()]
+        if (cn.length == 2 && cn[0] == '十') {
+            val unit = map[cn[1]] ?: 0
+            return 10 + unit
+        }
+        if (cn.length == 2) {
+            val tens = map[cn[0]] ?: return null
+            val units = map[cn[1]] ?: return null
+            return tens * 10 + units
+        }
+        return null
+    }
     private fun dedupeDrafts(list: List<ExtractedTodoDraft>): List<ExtractedTodoDraft> {
         val seen = mutableSetOf<String>()
         val result = mutableListOf<ExtractedTodoDraft>()

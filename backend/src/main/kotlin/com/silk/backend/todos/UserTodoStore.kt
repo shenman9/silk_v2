@@ -168,59 +168,147 @@ object UserTodoStore {
 
     internal fun logicalDedupKey(title: String, actionType: String?, actionDetail: String?): String {
         val at = actionType?.trim()?.lowercase(Locale.getDefault())?.ifBlank { null }
-        val adNorm = normalizeActionDetailForKey(at, actionDetail)
+        var adNorm = normalizeActionDetailForKey(at, actionDetail)
+        // actionType=alarm but missing actionDetail: try to extract time from title
+        if ((at == "alarm" || at == "calendar") && adNorm == null) {
+            adNorm = extractTimeFromTitle(title)
+            if (adNorm != null) return "$at:$adNorm"
+        }
         if ((at == "alarm" || at == "calendar") && adNorm != null) {
             return "$at:$adNorm"
         }
         return "t:${normKey(title)}"
     }
 
+    /** Try to parse a time string like "七点起床" → "07:00", "下午3点半开会" → "15:30" */
+    private fun extractTimeFromTitle(title: String): String? {
+        val t = title.trim()
+        val pm = t.contains("下午") || t.contains("晚上") || t.contains("傍晚")
+        // Chinese numeral + 点 (e.g. 七点, 十二点半)
+        val cnHalf = Regex("([一二三四五六七八九十两零]+点半)").find(t)
+        if (cnHalf != null) {
+            val cn = cnHalf.groupValues[1].replace("点半", "")
+            val h = parseCnHour(cn) ?: return null
+            val hour = if (pm && h in 1..11) h + 12 else h
+            if (hour in 0..23) return "%02d:%02d".format(hour, 30)
+        }
+        val cnExact = Regex("([一二三四五六七八九十两零]+点)").find(t)
+        if (cnExact != null) {
+            val cn = cnExact.groupValues[1].replace("点", "")
+            val h = parseCnHour(cn) ?: return null
+            val hour = if (pm && h in 1..11) h + 12 else h
+            if (hour in 0..23) return "%02d:%02d".format(hour, 0)
+        }
+        // Arabic numeral + 点 (e.g. 7点, 3点半)
+        val hOnly = Regex("(\\d{1,2})\\s*点").find(t)
+        if (hOnly != null) {
+            val h = hOnly.groupValues[1].toIntOrNull() ?: return null
+            var hour = h
+            if (pm) {
+                if (h in 1..11) hour = h + 12
+                else if (h == 12) hour = 12
+            }
+            if (hour !in 0..23) return null
+            val minute = if (t.contains("半")) 30 else 0
+            return "%02d:%02d".format(hour, minute)
+        }
+        // HH:mm format
+        val hm = Regex("(\\d{1,2})\\s*[:：]\\s*(\\d{2})").find(t)
+        if (hm != null) {
+            val h = hm.groupValues[1].toIntOrNull() ?: return null
+            val m = hm.groupValues[2].toIntOrNull() ?: return null
+            if (h in 0..23 && m in 0..59) return "%02d:%02d".format(h, m)
+        }
+        return null
+    }
+
+    /** Parse Chinese numeral hour string: "七"→7, "十二"→12, "十"→10 */
+    private fun parseCnHour(cn: String): Int? {
+        val map = mapOf('一' to 1,'二' to 2,'三' to 3,'四' to 4,'五' to 5,'六' to 6,'七' to 7,'八' to 8,'九' to 9,'十' to 10,'两' to 2,'零' to 0)
+        if (cn.length == 1) return map[cn.single()]
+        if (cn.length == 2 && cn[0] == '十') {
+            val unit = map[cn[1]] ?: 0
+            return 10 + unit
+        }
+        if (cn.length == 2) {
+            val tens = map[cn[0]] ?: return null
+            val units = map[cn[1]] ?: return null
+            return tens * 10 + units
+        }
+        return null
+    }
+
     private fun normKey(title: String): String {
         var s = title.trim().lowercase(Locale.getDefault())
         s = s.replace(Regex("\\s+"), " ")
-        s = s.replace(Regex("[，。、；:!？!．·…~～\"'\"''（）()\\[\\]【】|]+"), "")
+        s = s.replace(Regex("[“”‘’，。、；:!?！．·…~～\"'（）()\\[\\]【】|/《》〈〉{}]+"), "")
         s = s.replace(
-            Regex("^(设置闹钟|设闹钟|闹钟|提醒我|记得|记得要|请|帮忙|麻烦)\\s*[:：]?\\s*"),
+            Regex("^(设置闹钟|设闹钟|闹钟|提醒我|提醒|记得|记得要|请|帮忙|麻烦|帮我|好的我会|好的|没问题|收到|知道了|明白了|ok|好)\\s*[:：]?\\s*"),
+            ""
+        )
+        s = s.replace(Regex("[:：]\\s*$"), "")
+        s = s.replace(Regex("^\\s*(设置|设定|安排?|创建?|添加?)\\s*[:：]?\\s*"), "")
+        s = s.replace(
+            Regex("的?(闹钟|提醒|叫醒|起床铃|日程|日历|事项)$"),
             ""
         )
         return s.trim().ifEmpty { title.trim().lowercase(Locale.getDefault()) }
     }
 
+
     private fun normalizeActionDetailForKey(actionType: String?, detail: String?): String? {
         if (detail == null) return null
         val t = detail.trim().lowercase(Locale.getDefault()).ifBlank { return null }
+        // "HH:mm" exact
         val hm = Regex("^(\\d{1,2})\\s*[:：]\\s*(\\d{2})$").find(t)
         if (hm != null) {
             val h = hm.groupValues[1].toIntOrNull() ?: return normKey(t)
             val m = hm.groupValues[2].toIntOrNull() ?: return normKey(t)
             if (h in 0..23 && m in 0..59) return "%02d:%02d".format(h, m)
         }
+        // "YYYY-MM-DD HH:mm" or "YYYY-MM-DDTHH:mm"
+        val fullDt = Regex("(\\d{4})-(\\d{2})-(\\d{2})[T ]?(\\d{1,2})[:：](\\d{2})").find(t)
+        if (fullDt != null) {
+            val h = fullDt.groupValues[4].toIntOrNull() ?: return normKey(t)
+            val m = fullDt.groupValues[5].toIntOrNull() ?: return normKey(t)
+            if (h in 0..23 && m in 0..59) {
+                return "%s-%s-%s %02d:%02d".format(
+                    fullDt.groupValues[1], fullDt.groupValues[2], fullDt.groupValues[3], h, m
+                )
+            }
+        }
+        // "今天 15:00" / "明天 9:30"
+        val relTime = Regex("^(今天|明天|后天|大后天|下周)\\s*(\\d{1,2})\\s*[:：]\\s*(\\d{2})").find(t)
+        if (relTime != null) {
+            val h = relTime.groupValues[2].toIntOrNull() ?: return normKey(t)
+            val m = relTime.groupValues[3].toIntOrNull() ?: return normKey(t)
+            if (h in 0..23 && m in 0..59) return "%s %02d:%02d".format(relTime.groupValues[1], h, m)
+        }
         return normKey(t)
     }
 
-    /** 未完成且非闹钟/日程结构化项：若归一化标题互为包含则并成一条（解决模型拆成多条近义句）。 */
+    /** 若归一化标题互为包含则并成一条（解决一事多条）；已完成项也参与合并以清理历史。 */
     private fun mergeContainedUndoneTitles(items: List<UserTodoItemDto>): List<UserTodoItemDto> {
-        val done = items.filter { it.done }
-        var undone = items.filter { !it.done }.toMutableList()
-        if (undone.size < 2) return items
+        var pool = items.toMutableList()
+        if (pool.size < 2) return items
         val now = System.currentTimeMillis()
         var changed = true
-        while (changed && undone.size > 1) {
+        while (changed && pool.size > 1) {
             changed = false
-            pair@ for (i in 0 until undone.size) {
-                for (j in i + 1 until undone.size) {
-                    val a = undone[i]
-                    val b = undone[j]
+            pair@ for (i in 0 until pool.size) {
+                for (j in i + 1 until pool.size) {
+                    val a = pool[i]
+                    val b = pool[j]
                     val merged = tryMergeByContainedNormTitle(a, b, now) ?: continue
-                    undone.removeAt(j)
-                    undone.removeAt(i)
-                    undone.add(merged)
+                    pool.removeAt(j)
+                    pool.removeAt(i)
+                    pool.add(merged)
                     changed = true
                     break@pair
                 }
             }
         }
-        return done + undone
+        return pool
     }
 
     private fun tryMergeByContainedNormTitle(
@@ -228,10 +316,13 @@ object UserTodoStore {
         b: UserTodoItemDto,
         now: Long
     ): UserTodoItemDto? {
-        if (a.done || b.done) return null
+        val anyDone = a.done || b.done
+        // For same-key structured alarm/calendar: let mergeItemsByLogicalKey handle
+        // Here we catch cross-key semantic overlap via normKey containment
         val ta = a.actionType?.trim()?.lowercase(Locale.getDefault()) ?: ""
         val tb = b.actionType?.trim()?.lowercase(Locale.getDefault()) ?: ""
-        if (ta == "alarm" || ta == "calendar" || tb == "alarm" || tb == "calendar") {
+        if ((ta == "alarm" || ta == "calendar") && (tb == "alarm" || tb == "calendar")) {
+            // both structured: if keys differ, they genuinely refer to different times
             if (logicalDedupKey(a.title, a.actionType, a.actionDetail) !=
                 logicalDedupKey(b.title, b.actionType, b.actionDetail)
             ) {
@@ -240,7 +331,7 @@ object UserTodoStore {
         }
         val na = normKey(a.title)
         val nb = normKey(b.title)
-        if (na.length < 4 || nb.length < 4) return null
+        if (na.length < 2 || nb.length < 2) return null
         val contained = (na.contains(nb) || nb.contains(na))
         if (!contained) return null
         val newer = if (a.updatedAt >= b.updatedAt) a else b
@@ -254,7 +345,7 @@ object UserTodoStore {
                 .filter { it.isNotEmpty() }
                 .maxByOrNull { it.length }
                 ?.ifBlank { null },
-            done = false,
+            done = anyDone,
             updatedAt = now
         )
     }
