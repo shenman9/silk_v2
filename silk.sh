@@ -4,14 +4,14 @@
 # Silk 系统管理脚本
 # ============================================================
 # 用法:
-#   ./silk.sh deploy   - 一键部署 (构建全部 + 启动，含 Weaviate)
+#   ./silk.sh deploy   - 一键部署 (WebApp+APK+鸿蒙HAP + 启动，含 Weaviate)
 #   ./silk.sh start    - 启动所有服务 (后端 + 前端 + Weaviate)
 #   ./silk.sh stop     - 停止所有服务
 #   ./silk.sh restart  - 重启所有服务
 #   ./silk.sh logs     - 查看日志
 #   ./silk.sh build    - 构建前端 (WebApp)
 #   ./silk.sh build-apk - 构建 Android APK
-#   ./silk.sh build-hap - 构建 HarmonyOS HAP
+#   ./silk.sh build-hap - 鸿蒙：ohpm → hvigor sync/assembleHap（与 DevEco CLI 一致）→ hdc install → aa start（脚本不结束模拟器；SILK_HARMONY_NO_START=1 仅跳过 aa start；deploy 仍 SILK_SKIP_HARMONY_RUN 跳过 hdc）
 #   ./silk.sh build-all - 构建全部 (WebApp + APK + HAP)
 #   ./silk.sh status   - 检查所有服务状态
 #   ./silk.sh weaviate - Weaviate 管理 (start/stop/status/schema)
@@ -162,6 +162,23 @@ get_pid_on_port() {
     lsof -ti:$1 2>/dev/null
 }
 
+# 仅允许清理由 silk.sh 管理的进程，避免误伤 DevEco/模拟器等外部进程
+is_silk_managed_pid() {
+    local pid="$1"
+    local cmdline
+    cmdline=$(ps -p "$pid" -o command= 2>/dev/null)
+    if [ -z "$cmdline" ]; then
+        return 1
+    fi
+
+    case "$cmdline" in
+        *"$SILK_DIR"*|*":backend:run"*|*"python3 -m http.server $FRONTEND_PORT"*|*"python -m http.server $FRONTEND_PORT"*)
+            return 0
+            ;;
+    esac
+    return 1
+}
+
 # 自动清理端口占用
 kill_port_process() {
     local port=$1
@@ -169,24 +186,64 @@ kill_port_process() {
     local force=${3:-false}
     
     if check_port $port; then
-        local PID=$(get_pid_on_port $port)
-        local PROC_NAME=$(ps -p $PID -o comm= 2>/dev/null || echo "unknown")
+        local PIDS
+        PIDS=$(get_pid_on_port "$port")
+        local PROC_NAME
+        PROC_NAME=$(ps -p "$(echo "$PIDS" | head -1)" -o comm= 2>/dev/null || echo "unknown")
         
         if [ "$force" == "true" ]; then
-            echo -e "  ${YELLOW}⚠ 端口 $port 被 $PROC_NAME (PID: $PID) 占用，正在终止...${NC}"
-            kill -9 $PID 2>/dev/null
+            echo -e "  ${YELLOW}⚠ 端口 $port 被 $PROC_NAME (PID: $(echo "$PIDS" | tr '\n' ' ')) 占用，检查是否为 Silk 进程...${NC}"
+            local killed_any=false
+            local skipped_any=false
+            for PID in $PIDS; do
+                if is_silk_managed_pid "$PID"; then
+                    kill -TERM "$PID" 2>/dev/null
+                    killed_any=true
+                else
+                    skipped_any=true
+                fi
+            done
+
             sleep 1
+            if check_port "$port" && [ "$killed_any" = true ]; then
+                for PID in $PIDS; do
+                    if is_silk_managed_pid "$PID"; then
+                        kill -9 "$PID" 2>/dev/null
+                    fi
+                done
+                sleep 1
+            fi
+
+            if [ "$skipped_any" = true ]; then
+                echo -e "  ${YELLOW}⚠ 发现非 Silk 进程占用端口 $port，已跳过（防止误杀外部程序/模拟器）${NC}"
+            fi
             if check_port $port; then
                 echo -e "  ${RED}❌ 无法释放端口 $port${NC}"
                 return 1
             fi
             echo -e "  ${GREEN}✓ 端口 $port 已释放${NC}"
         else
-            echo -e "  ${YELLOW}⚠ 端口 $port 被 $PROC_NAME (PID: $PID) 占用${NC}"
+            echo -e "  ${YELLOW}⚠ 端口 $port 被 $PROC_NAME (PID: $(echo "$PIDS" | tr '\n' ' ')) 占用${NC}"
             echo -n "  是否终止? [y/N]: "
             read -t 5 answer
             if [ "$answer" == "y" ] || [ "$answer" == "Y" ]; then
-                kill -9 $PID 2>/dev/null
+                local killed_any=false
+                for PID in $PIDS; do
+                    if is_silk_managed_pid "$PID"; then
+                        kill -TERM "$PID" 2>/dev/null
+                        killed_any=true
+                    else
+                        echo -e "  ${YELLOW}⚠ 跳过非 Silk 进程 PID=$PID（防止误杀）${NC}"
+                    fi
+                done
+                if [ "$killed_any" = true ]; then
+                    sleep 1
+                    for PID in $PIDS; do
+                        if is_silk_managed_pid "$PID"; then
+                            kill -9 "$PID" 2>/dev/null
+                        fi
+                    done
+                fi
                 sleep 1
                 echo -e "  ${GREEN}✓ 端口已释放${NC}"
             else
@@ -687,9 +744,8 @@ build_hap() {
     
     local HARMONY_DIR="$SILK_DIR/frontend/harmonyApp"
     
-    # 检查 DevEco Studio 是否安装
+    # DevEco Studio 根目录（Contents 或安装根目录，与 scripts/deploy_win.sh 一致）
     if [ -z "$DEVECO_HOME" ]; then
-        # 尝试常见安装路径
         if [ -d "/Applications/DevEco-Studio.app" ]; then
             DEVECO_HOME="/Applications/DevEco-Studio.app/Contents"
         elif [ -d "$HOME/DevEco-Studio" ]; then
@@ -699,25 +755,37 @@ build_hap() {
         fi
     fi
     
-    # 检查 hvigorw 命令
-    local HVIGORW="$HARMONY_DIR/hvigorw"
-    if [ ! -f "$HVIGORW" ]; then
-        echo -e "${YELLOW}⚠ hvigorw 未找到，请先在 DevEco Studio 中打开项目以生成构建脚本${NC}"
+    # 兼容部分环境将 DEVECO_HOME 指向 .app 本体
+    if [ -d "$DEVECO_HOME/Contents/tools/hvigor/bin" ]; then
+        DEVECO_HOME="$DEVECO_HOME/Contents"
+    fi
+    
+    local OHPM_CMD=""
+    local HVIGORW_CMD=""
+    local DEVECO_SDK_HOME=""
+    
+    if [ -n "$DEVECO_HOME" ] && [ -d "$DEVECO_HOME/tools/ohpm/bin" ]; then
+        OHPM_CMD="$DEVECO_HOME/tools/ohpm/bin/ohpm"
+        HVIGORW_CMD="$DEVECO_HOME/tools/hvigor/bin/hvigorw"
+        DEVECO_SDK_HOME="$DEVECO_HOME/sdk"
+    fi
+    
+    # 回退：项目内 hvigorw（旧流程）
+    if [ -z "$HVIGORW_CMD" ] || [ ! -x "$HVIGORW_CMD" ]; then
+        if [ -f "$HARMONY_DIR/hvigorw" ]; then
+            HVIGORW_CMD="$HARMONY_DIR/hvigorw"
+        fi
+    fi
+    
+    if [ -z "$HVIGORW_CMD" ] || [ ! -x "$HVIGORW_CMD" ]; then
+        echo -e "${YELLOW}⚠ 未找到 DevEco 自带 hvigorw${NC}"
+        echo -e "  请安装 DevEco Studio，或设置 ${CYAN}DEVECO_HOME${NC} 指向安装目录（macOS 一般为 ${CYAN}/Applications/DevEco-Studio.app/Contents${NC}）"
         echo ""
-        echo -e "${CYAN}使用说明:${NC}"
-        echo "  1. 打开 DevEco Studio"
-        echo "  2. 选择 'Open Project'"
-        echo "  3. 打开目录: $HARMONY_DIR"
-        echo "  4. 等待项目初始化完成"
-        echo "  5. 使用 DevEco Studio 内置构建功能或重新运行此脚本"
-        echo ""
-        echo -e "${CYAN}或者手动构建:${NC}"
-        echo "  cd $HARMONY_DIR"
-        echo "  hvigorw assembleHap --mode module -p module=entry@entry"
+        echo -e "${CYAN}或手动:${NC} 在 DevEco 中打开 $HARMONY_DIR 并完成 Sync / 构建"
         return 1
     fi
     
-    # 从 .env 取后端地址
+    # 从 .env 取后端地址（hvigor sync 会据此重写 EnvConfig.ets）
     if [ -n "$BACKEND_BASE_URL" ]; then
         HAP_BACKEND_URL="$BACKEND_BASE_URL"
     elif [ -n "$BACKEND_HOST" ]; then
@@ -725,45 +793,153 @@ build_hap() {
     else
         HAP_BACKEND_URL="http://localhost:${BACKEND_HTTP_PORT:-8003}"
     fi
-    echo -e "  后端地址: ${CYAN}$HAP_BACKEND_URL${NC}"
+    echo -e "  根目录 .env → HAP 后端: ${CYAN}$HAP_BACKEND_URL${NC}（sync 时写入 EnvConfig.ets）"
     
-    echo ""
-    echo -e "${BLUE}正在构建 HarmonyOS HAP...${NC}"
+    # DevEco hdc（CLI 安装 HAP；可用环境变量 HDC 覆盖）
+    local HDC_CMD="${HDC:-}"
+    if [ -z "$HDC_CMD" ] || [ ! -x "$HDC_CMD" ]; then
+        for cand in \
+            "${DEVECO_HOME}/sdk/default/openharmony/toolchains/hdc" \
+            "/Applications/DevEco-Studio.app/Contents/sdk/default/openharmony/toolchains/hdc"; do
+            if [ -n "$cand" ] && [ -x "$cand" ]; then
+                HDC_CMD="$cand"
+                break
+            fi
+        done
+    fi
+    
     cd "$HARMONY_DIR"
     
-    # 执行构建
-    $HVIGORW assembleHap --mode module -p module=entry@entry 2>&1
+    # ---------- 鸿蒙环境（hvigor 参数与 DevEco-Studio 命令行一致：--parallel --incremental --daemon）----------
+    run_hvigor() {
+        (
+            if [ -n "$DEVECO_HOME" ] && [ -d "$DEVECO_HOME/jbr" ]; then
+                export JAVA_HOME="$DEVECO_HOME/jbr"
+                export PATH="$DEVECO_HOME/jbr/bin:$PATH"
+            fi
+            if [ -n "$DEVECO_SDK_HOME" ] && [ -d "$DEVECO_SDK_HOME" ]; then
+                export DEVECO_SDK_HOME="$DEVECO_SDK_HOME"
+            fi
+            "$HVIGORW_CMD" "$@"
+        )
+    }
     
-    if [ $? -eq 0 ]; then
-        # 查找生成的 HAP 文件
-        local HAP_FILE=$(find "$HARMONY_DIR/entry/build" -name "*.hap" -type f 2>/dev/null | head -1)
-        
-        if [ -n "$HAP_FILE" ]; then
-            local HAP_SIZE=$(du -h "$HAP_FILE" | cut -f1)
-            
-            echo ""
-            echo -e "${GREEN}✅ HAP 构建成功${NC}"
-            echo -e "  大小: $HAP_SIZE"
-            echo -e "  路径: $HAP_FILE"
-            
-            # 复制到 backend/static 目录供下载
-            echo ""
-            echo -e "${BLUE}复制到 backend/static 目录供下载...${NC}"
-            mkdir -p "$APK_OUTPUT_DIR"
-            cp "$HAP_FILE" "$APK_OUTPUT_DIR/"
-            
-            local HAP_NAME=$(basename "$HAP_FILE")
-            ln -sf "$APK_OUTPUT_DIR/$HAP_NAME" "$APK_OUTPUT_DIR/silk.hap"
-            echo -e "${GREEN}✅ 已复制到: $APK_OUTPUT_DIR/$HAP_NAME${NC}"
-            echo -e "${GREEN}✅ 已创建链接: $APK_OUTPUT_DIR/silk.hap${NC}"
-        else
-            echo ""
-            echo -e "${YELLOW}⚠ HAP 构建成功但未找到输出文件${NC}"
+    local HVIGOR_IDE_FLAGS="-p product=default --analyze=normal --parallel --incremental --daemon"
+    
+    # 与 DevEco「刷新依赖 → 同步工程 → entry 模块 HAP」一致
+    if [ -n "$OHPM_CMD" ] && [ -x "$OHPM_CMD" ]; then
+        echo ""
+        echo -e "${BLUE}[Harmony 1/4] Refresh 依赖 (ohpm install)...${NC}"
+        "$OHPM_CMD" install 2>&1
+        if [ $? -ne 0 ]; then
+            echo -e "${RED}❌ ohpm install 失败${NC}"
+            return 1
         fi
     else
+        echo -e "${YELLOW}⚠ 未找到 DevEco ohpm，跳过依赖安装（若构建失败请先安装 DevEco Studio）${NC}"
+    fi
+    
+    echo ""
+    echo -e "${BLUE}[Harmony 2/4] Sync 工程 (hvigor --sync, .env → EnvConfig.ets)...${NC}"
+    run_hvigor --sync $HVIGOR_IDE_FLAGS 2>&1
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}❌ hvigor --sync 失败${NC}"
+        return 1
+    fi
+    
+    echo ""
+    echo -e "${BLUE}[Harmony 3/4] Build entry HAP (hvigor assembleHap --mode module)...${NC}"
+    run_hvigor assembleHap --mode module -p module=entry@default $HVIGOR_IDE_FLAGS 2>&1
+
+    if [ $? -ne 0 ]; then
         echo ""
         echo -e "${RED}❌ HAP 构建失败${NC}"
         return 1
+    fi
+    
+    local HAP_FILE=""
+    for cand in \
+        "$HARMONY_DIR/entry/build/default/outputs/default/entry-default-unsigned.hap" \
+        "$HARMONY_DIR/entry/build/default/outputs/default/app/entry-default.hap"; do
+        if [ -f "$cand" ]; then
+            HAP_FILE="$cand"
+            break
+        fi
+    done
+    if [ -z "$HAP_FILE" ]; then
+        HAP_FILE=$(find "$HARMONY_DIR/entry/build" -name "*.hap" -type f 2>/dev/null | head -1)
+    fi
+    if [ -z "$HAP_FILE" ]; then
+        echo ""
+        echo -e "${YELLOW}⚠ 构建未报错但未找到 .hap 输出${NC}"
+        return 1
+    fi
+    
+    local HAP_SIZE=$(du -h "$HAP_FILE" | cut -f1)
+    echo ""
+    echo -e "${GREEN}✅ HAP 构建成功${NC}"
+    echo -e "  大小: $HAP_SIZE"
+    echo -e "  路径: $HAP_FILE"
+    
+    echo ""
+    echo -e "${BLUE}复制到 backend/static 目录供下载...${NC}"
+    mkdir -p "$APK_OUTPUT_DIR"
+    cp "$HAP_FILE" "$APK_OUTPUT_DIR/"
+    local HAP_NAME=$(basename "$HAP_FILE")
+    ln -sf "$APK_OUTPUT_DIR/$HAP_NAME" "$APK_OUTPUT_DIR/silk.hap"
+    echo -e "${GREEN}✅ 已复制到: $APK_OUTPUT_DIR/$HAP_NAME${NC}"
+    echo -e "${GREEN}✅ 已创建链接: $APK_OUTPUT_DIR/silk.hap${NC}"
+    
+    # hdc install → aa start（默认拉起 entry，与 IDE 运行一致；不调用 hdc/emulator 结束设备）
+    # SILK_HARMONY_NO_START=1 跳过 aa start；./silk.sh deploy 仍通过 SILK_SKIP_HARMONY_RUN=1 跳过 hdc
+    if [ -n "${SILK_SKIP_HARMONY_RUN:-}" ]; then
+        echo ""
+        echo -e "${CYAN}已跳过 hdc (SILK_SKIP_HARMONY_RUN)；手动示例:${NC}"
+        if [ -n "$HDC_CMD" ] && [ -x "$HDC_CMD" ]; then
+            echo -e "  \"$HDC_CMD\" -t 127.0.0.1:5555 install -r \"$HAP_FILE\""
+            echo -e "  \"$HDC_CMD\" -t 127.0.0.1:5555 shell aa start -a EntryAbility -b com.silk.harmony  # 可选"
+        fi
+        return 0
+    fi
+    
+    if [ -z "$HDC_CMD" ] || [ ! -x "$HDC_CMD" ]; then
+        echo ""
+        echo -e "${YELLOW}⚠ 未检测到 hdc，跳过安装启动。可设置环境变量 ${CYAN}HDC${NC} 为 hdc 可执行文件路径。${NC}"
+        return 0
+    fi
+    
+    echo ""
+    echo -e "${BLUE}[Harmony 4/4] hdc install + aa start...${NC}"
+    local HDC_TARGET=""
+    HDC_TARGET=$(echo "${SILK_HDC_TARGET:-}" | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | head -1)
+    if [ -z "$HDC_TARGET" ]; then
+        HDC_TARGET=$("$HDC_CMD" list targets 2>/dev/null | tr -d '\r' | sed '/^[[:space:]]*$/d' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:[0-9]+' | head -1)
+    fi
+    if [ -z "$HDC_TARGET" ]; then
+        HDC_TARGET=$("$HDC_CMD" list targets 2>/dev/null | tr -d '\r' | sed '/^[[:space:]]*$/d' | head -1)
+    fi
+    if [ -z "$HDC_TARGET" ]; then
+        HDC_TARGET="127.0.0.1:5555"
+        echo -e "  ${YELLOW}⚠ hdc list targets 无输出，使用默认设备 ${CYAN}$HDC_TARGET${NC}（可设置 ${CYAN}SILK_HDC_TARGET${NC}）"
+    fi
+
+    echo -e "  设备: ${CYAN}$HDC_TARGET${NC}"
+    if ! "$HDC_CMD" -t "$HDC_TARGET" install -r "$HAP_FILE" 2>&1; then
+        echo -e "${RED}❌ hdc install 失败${NC}"
+        return 1
+    fi
+    local no_aa="${SILK_HARMONY_NO_START:-}"
+    local legacy_off="${SILK_HARMONY_AUTO_START:-}"
+    if [ "$no_aa" = "1" ] || [ "$no_aa" = "true" ] || [ "$no_aa" = "yes" ] \
+        || [ "$legacy_off" = "0" ] || [ "$legacy_off" = "false" ] || [ "$legacy_off" = "no" ]; then
+        echo -e "${GREEN}✅ 已安装 HAP（已跳过 aa start：SILK_HARMONY_NO_START 或 SILK_HARMONY_AUTO_START=0）${NC}"
+        echo -e "  手动: ${CYAN}\"$HDC_CMD\" -t \"$HDC_TARGET\" shell aa start -a EntryAbility -b com.silk.harmony${NC}"
+    else
+        if ! "$HDC_CMD" -t "$HDC_TARGET" shell aa start -a EntryAbility -b com.silk.harmony 2>&1; then
+            echo -e "${RED}❌ aa start EntryAbility 失败${NC}"
+            return 1
+        fi
+        echo -e "${GREEN}✅ 已安装并已启动 entry${NC}"
     fi
 }
 
@@ -808,28 +984,37 @@ deploy() {
     
     # 1. 清理端口冲突 (强制)
     echo ""
-    echo -e "${BLUE}[1/4] 清理端口冲突...${NC}"
+    echo -e "${BLUE}[1/5] 清理端口冲突...${NC}"
     kill_all_ports true
     sleep 2
     
-    # 2. 构建全部
+    # 2. WebApp + Android APK
     echo ""
-    echo -e "${BLUE}[2/4] 构建全部...${NC}"
+    echo -e "${BLUE}[2/5] 构建 WebApp + APK...${NC}"
     build_all
     if [ $? -ne 0 ]; then
         echo -e "${RED}❌ 构建失败，终止部署${NC}"
         return 1
     fi
     
-    # 3. 启动 Weaviate
+    # 3. HarmonyOS：ohpm + hvigor sync + assembleHap(entry)（与 DevEco CLI 一致）
     echo ""
-    echo -e "${BLUE}[3/4] 启动 Weaviate...${NC}"
+    echo -e "${BLUE}[3/5] 构建鸿蒙应用（ohpm / sync / assembleHap；不自动 hdc 安装）...${NC}"
+    SILK_SKIP_HARMONY_RUN=1 build_hap
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}❌ 鸿蒙 HAP 构建失败，终止部署${NC}"
+        return 1
+    fi
+    
+    # 4. 启动 Weaviate
+    echo ""
+    echo -e "${BLUE}[4/5] 启动 Weaviate...${NC}"
     weaviate_start
     sleep 2
     
-    # 4. 启动后端和前端
+    # 5. 启动后端和前端
     echo ""
-    echo -e "${BLUE}[4/4] 启动后端和前端...${NC}"
+    echo -e "${BLUE}[5/5] 启动后端和前端...${NC}"
     start_services_internal
 }
 
@@ -1199,7 +1384,7 @@ case "$1" in
         echo "用法: $0 <命令>"
         echo ""
         echo "命令:"
-        echo "  deploy, d     一键部署 (构建全部 + 启动 + Weaviate)"
+        echo "  deploy, d     一键部署 (WebApp+APK+鸿蒙HAP + 启动 + Weaviate)"
         echo "  start         启动所有服务 (后端 + 前端 + Weaviate)"
         echo "  stop          停止所有服务"
         echo "  restart, r    重启所有服务"
@@ -1207,7 +1392,7 @@ case "$1" in
         echo "  logs, l       查看日志"
         echo "  build, b      构建前端 (WebApp)"
         echo "  build-apk, ba 构建 Android APK"
-        echo "  build-hap, bh 构建鸿蒙 HAP (需要 DevEco Studio)"
+        echo "  build-hap, bh 鸿蒙: ohpm→sync→assembleHap→hdc install→aa start（SILK_HARMONY_NO_START=1 跳过启动；SILK_HDC_TARGET 默认 list targets / 127.0.0.1:5555）"
         echo "  build-all, bp 构建全部 (WebApp + APK)"
         echo "  status, s     检查所有服务状态"
         echo "  weaviate, w   Weaviate 管理 (start/stop/status/schema)"
