@@ -311,7 +311,33 @@ data class UserTodoItemDto(
     val actionDetail: String? = null,
     val createdAt: Long = 0L,
     val updatedAt: Long = 0L,
-    val done: Boolean = false
+    val done: Boolean = false,
+    /** 首次成功执行的时间戳（毫秒），null = 从未执行 */
+    val executedAt: Long? = null,
+    /** 最近一次创建的系统提醒/日历事件 ID，用于重新执行时先删除旧的 */
+    val reminderId: Long? = null,
+    /** long_term_template | short_term_instance */
+    val taskKind: String = "short_term_instance",
+    /** yearly | monthly | workday | custom */
+    val repeatRule: String? = null,
+    /** 规则锚点：07:00 / MM-DD / dayOfMonth 等 */
+    val repeatAnchor: String? = null,
+    val activeFrom: Long? = null,
+    val activeTo: Long? = null,
+    /** 实例回指模板 ID（仅 short_term_instance 使用） */
+    val templateId: String? = null,
+    /** active | done | cancelled | deferred */
+    val lifecycleState: String = "active",
+    /** 关闭时间（完成/取消/延期） */
+    val closedAt: Long? = null,
+    /** 最近一次触发该任务的证据消息时间 */
+    val lastEvidenceAt: Long? = null,
+    /** 本次证据是否为明确指令（用于 cancelled 回流门槛） */
+    val explicitIntent: Boolean = false,
+    /** 模板实例化分桶键（如 2026-03-27） */
+    val dateBucket: String? = null,
+    /** 被重新激活次数（观测字段） */
+    val reopenCount: Int = 0
 )
 
 @Serializable
@@ -322,11 +348,59 @@ data class UserTodosResponse(
 )
 
 @Serializable
+data class UserTodoRefreshStatusResponse(
+    val success: Boolean,
+    val message: String,
+    val running: Boolean = false,
+    val lastStartedAt: Long? = null,
+    val lastFinishedAt: Long? = null,
+    val lastError: String? = null
+)
+
+@Serializable
+data class UserTodoExtractionDiagnosticsResponse(
+    val success: Boolean,
+    val message: String,
+    val userId: String,
+    val updatedAt: Long,
+    val source: String,
+    val totalGroups: Int,
+    val transcriptChars: Int,
+    val llmDraftCount: Int,
+    val heuristicDraftCount: Int,
+    val forcedRecurringCount: Int,
+    val finalDraftCount: Int,
+    val matchedRecurringLines: List<String> = emptyList(),
+    val note: String = ""
+)
+
+@Serializable
 data class UpdateUserTodoRequest(
     val userId: String,
     val itemId: String,
-    val done: Boolean
+    val done: Boolean? = null,
+    val title: String? = null,
+    val actionType: String? = null,
+    val actionDetail: String? = null,
+    val executedAt: Long? = null,
+    val reminderId: Long? = null,
+    val clearReminderId: Boolean = false,
+    val taskKind: String? = null,
+    val repeatRule: String? = null,
+    val repeatAnchor: String? = null,
+    val activeFrom: Long? = null,
+    val activeTo: Long? = null,
+    val templateId: String? = null,
+    val lifecycleState: String? = null,
+    val closedAt: Long? = null,
+    val lastEvidenceAt: Long? = null,
+    val explicitIntent: Boolean? = null,
+    val dateBucket: String? = null,
+    val reopenCount: Int? = null
 )
+
+@Serializable
+data class DeleteUserTodoRequest(val userId: String, val itemId: String)
 
 @Serializable
 data class RefreshUserTodosRequest(

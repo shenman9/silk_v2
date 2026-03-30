@@ -18,6 +18,8 @@ export interface AlarmResult {
   message: string;
 }
 
+export type SystemReminderPresence = 'exists' | 'missing' | 'unknown';
+
 export class AlarmService {
   /**
    * 设定闹钟 — 自动选择可用方案（兼容旧调用，不清理已有系统闹钟）
@@ -194,5 +196,127 @@ export class AlarmService {
       Logger.error(TAG, `权限申请异常: ${err.code} ${err.message}`);
       return false;
     }
+  }
+
+  /** 取消已发布的提醒（reminderAgentManager） */
+  static async cancelReminder(reminderId: number): Promise<boolean> {
+    try {
+      await reminderAgentManager.cancelReminder(reminderId);
+      Logger.info(TAG, `已取消提醒 reminderId=${reminderId}`);
+      return true;
+    } catch (e) {
+      const err = e as Record<string, Object>;
+      Logger.error(TAG, `取消提醒失败: ${err.code} ${err.message}`);
+      return false;
+    }
+  }
+
+  /** 删除日历事件 */
+  static async removeCalendarEvent(eventId: number): Promise<boolean> {
+    const context = getGlobalContext();
+    if (!context) {
+      Logger.error(TAG, 'removeCalendarEvent: context 为空');
+      return false;
+    }
+    try {
+      const granted = await AlarmService.requestPermissions(
+        ['ohos.permission.READ_CALENDAR' as Permissions, 'ohos.permission.WRITE_CALENDAR' as Permissions]
+      );
+      if (!granted) {
+        Logger.error(TAG, 'removeCalendarEvent: 日历权限被拒绝');
+        return false;
+      }
+      const mgr = calendarManager.getCalendarManager(context);
+      const calendar = await mgr.getCalendar();
+      await calendar.deleteEvent(eventId);
+      Logger.info(TAG, `已删除日历事件 eventId=${eventId}`);
+      return true;
+    } catch (e) {
+      const err = e as Record<string, Object>;
+      Logger.error(TAG, `删除日历事件失败: ${err.code} ${err.message}`);
+      return false;
+    }
+  }
+
+  /** 查询 alarm 提醒是否仍存在（仅查询，不触发权限申请弹窗） */
+  private static async hasAlarmReminder(
+    expectedHour: number | null,
+    expectedMinute: number | null,
+    expectedTitle: string
+  ): Promise<SystemReminderPresence> {
+    if (expectedHour === null || expectedMinute === null) {
+      return 'unknown';
+    }
+    try {
+      const reminders = await reminderAgentManager.getValidReminders();
+      for (let i = 0; i < reminders.length; i++) {
+        const rec = reminders[i];
+        if (rec.reminderType !== reminderAgentManager.ReminderType.REMINDER_TYPE_ALARM) {
+          continue;
+        }
+        const alarm = rec as reminderAgentManager.ReminderRequestAlarm;
+        if (alarm.hour !== expectedHour || alarm.minute !== expectedMinute) {
+          continue;
+        }
+        const expected = expectedTitle.trim();
+        const got = alarm.title ? alarm.title.trim() : '';
+        if (expected.length === 0 || got.length === 0 || got === expected) {
+          return 'exists';
+        }
+      }
+      return 'missing';
+    } catch (e) {
+      const err = e as Record<string, Object>;
+      Logger.error(TAG, `查询 alarm 提醒失败: ${err.code} ${err.message}`);
+      return 'unknown';
+    }
+  }
+
+  /** 查询日历事件是否仍存在（仅查询，不触发权限申请弹窗） */
+  private static async hasCalendarEvent(eventId: number): Promise<SystemReminderPresence> {
+    const context = getGlobalContext();
+    if (!context) {
+      return 'unknown';
+    }
+    try {
+      const mgr = calendarManager.getCalendarManager(context);
+      const calendar = await mgr.getCalendar();
+      const events = await calendar.getEvents();
+      for (let i = 0; i < events.length; i++) {
+        const event = events[i];
+        if (event.id === eventId) {
+          return 'exists';
+        }
+      }
+      return 'missing';
+    } catch (e) {
+      const err = e as Record<string, Object>;
+      Logger.error(TAG, `查询日历事件失败: ${err.code} ${err.message}`);
+      return 'unknown';
+    }
+  }
+
+  /**
+   * 判断待办在系统侧是否仍存在。
+   * - calendar: 通过 eventId 校验
+   * - alarm/none: 通过标题+时分在有效提醒中匹配
+   */
+  static async existsInSystem(
+    reminderId: number,
+    actionType: string,
+    title: string,
+    hour?: number,
+    minute?: number
+  ): Promise<SystemReminderPresence> {
+    const at = actionType.trim().toLowerCase();
+    if (at === 'calendar') {
+      if (!(reminderId > 0)) {
+        return 'missing';
+      }
+      return await AlarmService.hasCalendarEvent(reminderId);
+    }
+    const h = hour !== undefined ? hour : null;
+    const m = minute !== undefined ? minute : null;
+    return await AlarmService.hasAlarmReminder(h, m, title);
   }
 }

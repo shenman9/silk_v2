@@ -22,6 +22,7 @@ import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.time.Duration
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * 从用户所属各群近期聊天记录中提取待办，并合并写入 [UserTodoStore]。
@@ -30,6 +31,21 @@ import java.time.Duration
  * - LLM 抽取 + 启发式兜底（二选一，不叠加）；每次成功刷新用新列表**替换**未完成项（保留已完成），避免一事多条堆叠
  */
 object GroupTodoExtractionService {
+    data class ExtractionDiagnostics(
+        val userId: String,
+        val updatedAt: Long,
+        val source: String,
+        val totalGroups: Int,
+        val transcriptChars: Int,
+        val llmDraftCount: Int,
+        val heuristicDraftCount: Int,
+        val forcedRecurringCount: Int,
+        val finalDraftCount: Int,
+        val matchedRecurringLines: List<String>,
+        val note: String
+    )
+
+    private val diagnosticsByUser = ConcurrentHashMap<String, ExtractionDiagnostics>()
 
     private val httpClient = HttpClient.newBuilder()
         .version(HttpClient.Version.HTTP_1_1)
@@ -80,7 +96,7 @@ object GroupTodoExtractionService {
     private data class GroupSlice(
         val groupId: String,
         val groupName: String,
-        val messages: List<Pair<String, String>>
+        val messages: List<Triple<String, String, Long>>
     )
 
     private val skipSmallTalk = Regex(
@@ -92,6 +108,19 @@ object GroupTodoExtractionService {
         val apiKey = AIConfig.API_KEY.trim()
         if (apiKey.isEmpty()) {
             println("ℹ️ [GroupTodoExtractionService] 跳过：未配置 OPENAI_API_KEY")
+            diagnosticsByUser[userId] = ExtractionDiagnostics(
+                userId = userId,
+                updatedAt = System.currentTimeMillis(),
+                source = "skip",
+                totalGroups = 0,
+                transcriptChars = 0,
+                llmDraftCount = 0,
+                heuristicDraftCount = 0,
+                forcedRecurringCount = 0,
+                finalDraftCount = 0,
+                matchedRecurringLines = emptyList(),
+                note = "未配置 OPENAI_API_KEY"
+            )
             return@withContext
         }
         val user = UserRepository.findUserById(userId)
@@ -99,6 +128,19 @@ object GroupTodoExtractionService {
         val groups = GroupRepository.getUserGroups(userId)
         if (groups.isEmpty()) {
             println("ℹ️ [GroupTodoExtractionService] 用户无群组，跳过")
+            diagnosticsByUser[userId] = ExtractionDiagnostics(
+                userId = userId,
+                updatedAt = System.currentTimeMillis(),
+                source = "skip",
+                totalGroups = 0,
+                transcriptChars = 0,
+                llmDraftCount = 0,
+                heuristicDraftCount = 0,
+                forcedRecurringCount = 0,
+                finalDraftCount = 0,
+                matchedRecurringLines = emptyList(),
+                note = "用户无群组"
+            )
             return@withContext
         }
 
@@ -108,6 +150,19 @@ object GroupTodoExtractionService {
                 "ℹ️ [GroupTodoExtractionService] 未读到任何群消息文件；已尝试目录: " +
                     historyBaseDirs.joinToString()
             )
+            diagnosticsByUser[userId] = ExtractionDiagnostics(
+                userId = userId,
+                updatedAt = System.currentTimeMillis(),
+                source = "skip",
+                totalGroups = groups.size,
+                transcriptChars = 0,
+                llmDraftCount = 0,
+                heuristicDraftCount = 0,
+                forcedRecurringCount = 0,
+                finalDraftCount = 0,
+                matchedRecurringLines = emptyList(),
+                note = "未读到群消息文件"
+            )
             compactStoredTodosForUser(userId, apiKey)
             UserTodoStore.dedupeByLogicalKeyInPlace(userId)
             return@withContext
@@ -115,6 +170,10 @@ object GroupTodoExtractionService {
 
         val transcript = buildTranscriptString(slices)
         val heuristicDraftsPre = heuristicFromSlices(slices)
+        val latestEvidenceTs = slices.asSequence()
+            .flatMap { it.messages.asSequence() }
+            .map { it.third }
+            .maxOrNull() ?: System.currentTimeMillis()
         println(
             "📋 [GroupTodoExtractionService] 摘录长度=${transcript.length}，群段=${slices.size}，启发式候选=${heuristicDraftsPre.size}"
         )
@@ -159,7 +218,12 @@ actionType / actionDetail（能填就填，影响手机端是否显示「运行�
             else -> emptyList()
         }
 
-        val finalDrafts = dedupeDrafts(sourceDrafts).take(MAX_TODOS_PER_REFRESH)
+        val recurringResult = extractRecurringTemplateDrafts(slices)
+        val forcedRecurringDrafts = recurringResult.first
+        val recurringLines = recurringResult.second
+        val combinedDrafts = sourceDrafts + forcedRecurringDrafts
+        val finalDrafts = normalizeDraftsWithKind(dedupeDrafts(combinedDrafts), latestEvidenceTs)
+            .take(MAX_TODOS_PER_REFRESH)
         val shouldReplaceUndone = jsonOk || finalDrafts.isNotEmpty()
 
         if (shouldReplaceUndone) {
@@ -179,6 +243,40 @@ actionType / actionDetail（能填就填，影响手机端是否显示「运行�
         }
         compactStoredTodosForUser(userId, apiKey)
         UserTodoStore.dedupeByLogicalKeyInPlace(userId)
+        diagnosticsByUser[userId] = ExtractionDiagnostics(
+            userId = userId,
+            updatedAt = System.currentTimeMillis(),
+            source = when {
+                llmDrafts.isNotEmpty() -> "llm+forced_recurring"
+                llmOrParseFailed && heuristicDraftsPre.isNotEmpty() -> "heuristic+forced_recurring"
+                forcedRecurringDrafts.isNotEmpty() -> "forced_recurring_only"
+                else -> "none"
+            },
+            totalGroups = slices.size,
+            transcriptChars = transcript.length,
+            llmDraftCount = llmDrafts.size,
+            heuristicDraftCount = heuristicDraftsPre.size,
+            forcedRecurringCount = forcedRecurringDrafts.size,
+            finalDraftCount = finalDrafts.size,
+            matchedRecurringLines = recurringLines.take(6),
+            note = if (jsonOk) "json_ok" else "json_not_ok_or_empty"
+        )
+    }
+
+    fun getDiagnostics(userId: String): ExtractionDiagnostics {
+        return diagnosticsByUser[userId] ?: ExtractionDiagnostics(
+            userId = userId,
+            updatedAt = System.currentTimeMillis(),
+            source = "none",
+            totalGroups = 0,
+            transcriptChars = 0,
+            llmDraftCount = 0,
+            heuristicDraftCount = 0,
+            forcedRecurringCount = 0,
+            finalDraftCount = 0,
+            matchedRecurringLines = emptyList(),
+            note = "暂无抽取记录"
+        )
     }
 
     /**
@@ -299,7 +397,9 @@ actionType / actionDetail（能填就填，影响手机端是否显示「运行�
                         actionDetail = ad?.ifBlank { null },
                         createdAt = orig.createdAt,
                         updatedAt = now,
-                        done = done
+                        done = done,
+                        executedAt = orig.executedAt,
+                        reminderId = orig.reminderId
                     )
                 )
             }
@@ -335,7 +435,7 @@ actionType / actionDetail（能填就填，影响手机端是否显示「运行�
             val msgs = hist.messages
                 .filter { isContentMessage(it.messageType) }
                 .filter { it.content.isNotBlank() }
-                .map { it.senderName to it.content.trim() }
+                .map { Triple(it.senderName, it.content.trim(), it.timestamp) }
                 .takeLast(MAX_MESSAGES_PER_GROUP)
             if (msgs.isEmpty()) continue
             out.add(GroupSlice(groupId, groupName, msgs))
@@ -347,7 +447,7 @@ actionType / actionDetail（能填就填，影响手机端是否显示「运行�
         val sb = StringBuilder()
         for (slice in slices) {
             sb.appendLine("=== 群：${slice.groupName} (id=${slice.groupId}) ===")
-            for ((sender, content) in slice.messages) {
+            for ((sender, content, _) in slice.messages) {
                 for (line in content.split('\n')) {
                     val one = line.trim().replace("\r", "")
                     if (one.isEmpty()) continue
@@ -379,7 +479,7 @@ actionType / actionDetail（能填就填，影响手机端是否显示「运行�
             Regex("""(提醒|闹钟|叫醒|起床|几点).{0,80}""")
 
         for (slice in slices) {
-            for ((sender, raw) in slice.messages) {
+            for ((sender, raw, ts) in slice.messages) {
                 if (isLikelyAssistantSender(sender)) continue
                 var usedAlarmLineFallback = false
                 for (line in raw.split('\n')) {
@@ -408,19 +508,114 @@ actionType / actionDetail（能填就填，影响手机端是否显示「运行�
                         else -> "none"
                     }
                     val actionDetail = hm?.let { "%02d:%02d".format(it.first, it.second) }
+                    val explicitIntent = isExplicitTaskIntent(t)
                     out.add(
                         ExtractedTodoDraft(
                             title = title,
                             sourceGroupId = slice.groupId,
                             sourceGroupName = slice.groupName,
                             actionType = actionType,
-                            actionDetail = actionDetail
+                            actionDetail = actionDetail,
+                            evidenceAt = ts,
+                            explicitIntent = explicitIntent
                         )
                     )
                 }
             }
         }
         return dedupeDrafts(out)
+    }
+
+    /**
+     * 对“工作日/纪念日”这类长期重复任务做强兜底：
+     * 即使 LLM 成功但漏抽，也尽量保留周期模板。
+     */
+    private fun extractRecurringTemplateDrafts(slices: List<GroupSlice>): Pair<List<ExtractedTodoDraft>, List<String>> {
+        val out = mutableListOf<ExtractedTodoDraft>()
+        val matchedLines = mutableListOf<String>()
+        val workdayHabitCue = Regex("(工作日|每个?工作日|上班日).{0,40}(起床|吃药|提醒|闹钟)|((起床|吃药|提醒|闹钟).{0,40}(工作日|每个?工作日|上班日))")
+        val anniversaryCue = Regex("(纪念日|周年|生日)")
+
+        for (slice in slices) {
+            for ((sender, raw, ts) in slice.messages) {
+                if (isLikelyAssistantSender(sender)) continue
+                for (line in raw.split('\n')) {
+                    val t = line.trim()
+                    if (t.length < 3 || t.length > 200) continue
+                    if (skipSmallTalk.matches(t)) continue
+                    if (t.startsWith("http://", true) || t.startsWith("https://", true)) continue
+
+                    val isWorkdayHabit = workdayHabitCue.containsMatchIn(t)
+                    val isAnniversary = anniversaryCue.containsMatchIn(t)
+                    if (!isWorkdayHabit && !isAnniversary) continue
+                    matchedLines.add(t.take(120))
+
+                    val hm = extractRoughHourMinute(t)
+                    val compactTitle = if (t.length > 80) t.take(77) + "..." else t
+                    out.add(
+                        ExtractedTodoDraft(
+                            title = compactTitle,
+                            sourceGroupId = slice.groupId,
+                            sourceGroupName = slice.groupName,
+                            actionType = if (hm != null) "alarm" else "none",
+                            actionDetail = hm?.let { "%02d:%02d".format(it.first, it.second) },
+                            taskKind = "long_term_template",
+                            repeatRule = if (isWorkdayHabit) "workday" else "yearly",
+                            repeatAnchor = if (isWorkdayHabit) hm?.let { "%02d:%02d".format(it.first, it.second) } else null,
+                            evidenceAt = ts,
+                            explicitIntent = true
+                        )
+                    )
+                }
+            }
+        }
+        return dedupeDrafts(out) to matchedLines.distinct()
+    }
+
+    private fun isExplicitTaskIntent(text: String): Boolean {
+        val t = text.trim()
+        if (t.isEmpty()) return false
+        val explicit = Regex("(请|帮我|安排|提醒|闹钟|开会|准备|提交|截止|deadline|纪念日|每周|每月|每年|工作日|吃药|起床)")
+        return explicit.containsMatchIn(t)
+    }
+
+    private fun classifyTaskKind(title: String): Triple<String, String?, String?> {
+        val t = title.trim()
+        if (t.isEmpty()) return Triple("short_term_instance", null, null)
+        if (Regex("(纪念日|周年|生日)").containsMatchIn(t)) {
+            val md = Regex("(\\d{1,2})\\s*[-月]\\s*(\\d{1,2})").find(t)
+            val anchor = md?.let {
+                val m = it.groupValues[1].toIntOrNull()
+                val d = it.groupValues[2].toIntOrNull()
+                if (m != null && d != null && m in 1..12 && d in 1..31) "%02d-%02d".format(m, d) else null
+            }
+            return Triple("long_term_template", "yearly", anchor)
+        }
+        if (Regex("(工作日).*(起床|吃药|提醒)|((起床|吃药).*(工作日))").containsMatchIn(t)) {
+            val hm = extractRoughHourMinute(t)
+            val anchor = hm?.let { "%02d:%02d".format(it.first, it.second) }
+            return Triple("long_term_template", "workday", anchor)
+        }
+        return Triple("short_term_instance", null, null)
+    }
+
+    private fun normalizeDraftsWithKind(list: List<ExtractedTodoDraft>, fallbackTs: Long): List<ExtractedTodoDraft> {
+        val out = mutableListOf<ExtractedTodoDraft>()
+        for (d in list) {
+            val (kind, rule, anchor) = classifyTaskKind(d.title)
+            val eAt = if (d.evidenceAt > 0L) d.evidenceAt else fallbackTs
+            val existingAnchor = d.repeatAnchor?.trim()?.ifBlank { null }
+            val existingRule = d.repeatRule?.trim()?.lowercase()?.ifBlank { null }
+            out.add(
+                d.copy(
+                    taskKind = kind,
+                    repeatRule = existingRule ?: rule,
+                    repeatAnchor = existingAnchor ?: anchor,
+                    evidenceAt = eAt
+                )
+            )
+        }
+        return out
     }
 
     /** 本地时间提取：支持中文数字（七点、十点半）和阿拉伯数字（07:30） */
@@ -480,16 +675,31 @@ actionType / actionDetail（能填就填，影响手机端是否显示「运行�
         return null
     }
     private fun dedupeDrafts(list: List<ExtractedTodoDraft>): List<ExtractedTodoDraft> {
-        val seen = mutableSetOf<String>()
-        val result = mutableListOf<ExtractedTodoDraft>()
+        val pickedByKey = linkedMapOf<String, ExtractedTodoDraft>()
         for (d in list) {
             if (d.title.trim().length < 2) continue
-            val k = UserTodoStore.logicalDedupKey(d.title, d.actionType, d.actionDetail)
-            if (k in seen) continue
-            seen.add(k)
-            result.add(d)
+            val key = UserTodoStore.logicalDedupKey(
+                d.title,
+                d.actionType,
+                d.actionDetail,
+                d.taskKind
+            )
+            val old = pickedByKey[key]
+            if (old == null) {
+                pickedByKey[key] = d
+                continue
+            }
+            val keep = when {
+                old.taskKind != "long_term_template" && d.taskKind == "long_term_template" -> d
+                old.taskKind == "long_term_template" && d.taskKind != "long_term_template" -> old
+                !old.explicitIntent && d.explicitIntent -> d
+                old.explicitIntent && !d.explicitIntent -> old
+                (old.actionDetail ?: "").length < (d.actionDetail ?: "").length -> d
+                else -> old
+            }
+            pickedByKey[key] = keep
         }
-        return result.take(MAX_TODOS_PER_REFRESH)
+        return pickedByKey.values.take(MAX_TODOS_PER_REFRESH)
     }
 
     private fun callLlm(system: String, user: String, apiKey: String, temperature: Double = 0.35): String {
@@ -535,13 +745,23 @@ actionType / actionDetail（能填就填，影响手机端是否显示「运行�
                     ?.takeIf { it.isNotEmpty() && it != "null" }
                 val ad = o["actionDetail"]?.jsonPrimitive?.content?.trim()
                     ?.takeIf { it.isNotEmpty() }
+                val tk = o["taskKind"]?.jsonPrimitive?.content?.trim()?.lowercase()
+                    ?.takeIf { it == "long_term_template" || it == "short_term_instance" }
+                    ?: "short_term_instance"
+                val rr = o["repeatRule"]?.jsonPrimitive?.content?.trim()?.lowercase()
+                    ?.takeIf { it.isNotEmpty() }
+                val ra = o["repeatAnchor"]?.jsonPrimitive?.content?.trim()
+                    ?.takeIf { it.isNotEmpty() }
                 out.add(
                     ExtractedTodoDraft(
                         title = title,
                         sourceGroupId = gid,
                         sourceGroupName = gname,
                         actionType = at,
-                        actionDetail = ad
+                        actionDetail = ad,
+                        taskKind = tk,
+                        repeatRule = rr,
+                        repeatAnchor = ra
                     )
                 )
             }

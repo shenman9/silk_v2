@@ -4,6 +4,7 @@
 export interface Group {
   id: string;
   name: string;
+  invitationCode?: string;
   description?: string;
   avatar?: string;
   ownerId: string;

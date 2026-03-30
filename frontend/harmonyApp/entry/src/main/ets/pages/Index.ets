@@ -6,6 +6,7 @@ import { router as appRouter, PageName } from '../common/Router';
 import { LoginPage } from './LoginPage';
 import { GroupListPage } from './GroupListPage';
 import { ChatPage } from './ChatPage';
+import { TodoPage } from './TodoPage';
 import { SettingsPage } from './SettingsPage';
 
 @Entry
@@ -28,6 +29,8 @@ struct Index {
         GroupListPage();
       } else if (this.currentPage === PageName.Chat) {
         ChatPage();
+      } else if (this.currentPage === PageName.Todo) {
+        TodoPage();
       } else {
         SettingsPage();
       }

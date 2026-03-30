@@ -11,6 +11,7 @@ import io.ktor.server.plugins.contentnegotiation.*
 import io.ktor.server.plugins.cors.routing.*
 import io.ktor.serialization.kotlinx.json.*
 import io.ktor.http.*
+import kotlinx.serialization.json.Json
 
 fun main() {
     // 优先加载 .env（避免用 gradlew 直接启动时读不到配置）
@@ -36,7 +37,10 @@ fun Application.module() {
     install(Compression)
     
     install(ContentNegotiation) {
-        json()
+        json(Json {
+            ignoreUnknownKeys = true
+            encodeDefaults = true
+        })
     }
     
     install(CORS) {

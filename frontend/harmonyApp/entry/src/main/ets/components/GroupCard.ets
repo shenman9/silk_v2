@@ -45,7 +45,7 @@ export struct GroupCard {
                 .maxLines(1)
                 .textOverflow({ overflow: TextOverflow.Ellipsis })
             } else {
-              Text(this.group.unreadCount && this.group.unreadCount > 0 ? '有新消息' : '点击查看消息')
+              Text(this.group.unreadCount && this.group.unreadCount > 0 ? '有新消息' : '点击进入项目')
                 .fontSize(14)
                 .fontColor(SilkTheme.colors.textLight)
             }

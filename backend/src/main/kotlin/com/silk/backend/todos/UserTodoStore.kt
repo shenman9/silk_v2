@@ -5,6 +5,9 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.io.File
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
 import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -19,7 +22,11 @@ private data class UserTodoFilePayload(
  * 按用户持久化待办（chat_history/user_todos/{userId}.json）
  */
 object UserTodoStore {
-    private const val BASE_DIR = "chat_history/user_todos"
+    private val baseDirs = listOf(
+        "chat_history/user_todos",
+        "backend/chat_history/user_todos",
+        "../chat_history/user_todos"
+    ).distinct()
     private val json = Json {
         ignoreUnknownKeys = true
         prettyPrint = true
@@ -28,7 +35,17 @@ object UserTodoStore {
 
     private fun fileFor(userId: String): File {
         val safe = userId.replace(Regex("[^a-zA-Z0-9_-]"), "_")
-        return File(BASE_DIR, "$safe.json")
+        val name = "$safe.json"
+        val existing = baseDirs
+            .map { File(it, name) }
+            .firstOrNull { it.isFile }
+        if (existing != null) return existing
+        val existingDir = baseDirs
+            .map { File(it) }
+            .firstOrNull { it.isDirectory }
+        val targetDir = existingDir ?: File("backend/chat_history/user_todos")
+        targetDir.mkdirs()
+        return File(targetDir, name)
     }
 
     fun load(userId: String): List<UserTodoItemDto> {
@@ -46,8 +63,8 @@ object UserTodoStore {
     fun save(userId: String, items: List<UserTodoItemDto>) {
         val lock = locks.computeIfAbsent(userId) { Any() }
         synchronized(lock) {
-            File(BASE_DIR).mkdirs()
             val f = fileFor(userId)
+            f.parentFile?.mkdirs()
             val payload = UserTodoFilePayload(userId = userId, items = items)
             val tmp = File(f.parentFile, "${f.name}.tmp")
             tmp.writeText(json.encodeToString(payload))
@@ -63,40 +80,220 @@ object UserTodoStore {
     }
 
     /**
-     * 用本次从聊天抽取的结果**替换**所有未完成待办；已勾选完成的条目保留（历史完成态）。
-     * 避免仅 merge 追加导致「一事多条」永远堆在列表里。
+     * 用本次抽取结果做生命周期合并：
+     * - 长期模板：按逻辑键 upsert
+     * - 短期实例：active 更新；done/cancelled 仅满足回流门槛才重开
+     * - 刷新后按模板规则实例化今日任务（幂等）
      */
     fun replaceUndoneWithExtracted(userId: String, incoming: List<ExtractedTodoDraft>) {
         val lock = locks.computeIfAbsent(userId) { Any() }
         synchronized(lock) {
-            val existing = load(userId)
-            val keptDone = existing.filter { it.done }
+            val existing = load(userId).toMutableList()
             val now = System.currentTimeMillis()
-            val seenKeys = mutableSetOf<String>()
-            val newUndone = mutableListOf<UserTodoItemDto>()
             for (draft in incoming) {
                 val t = draft.title.trim()
                 if (t.isEmpty() || t.length > 500) continue
                 val at = draft.actionType?.trim()?.lowercase()?.ifBlank { null }
                 val ad = draft.actionDetail?.trim()?.ifBlank { null }
-                val lk = logicalDedupKey(t, at, ad)
-                if (lk in seenKeys) continue
-                seenKeys.add(lk)
-                newUndone.add(
-                    UserTodoItemDto(
-                        id = UUID.randomUUID().toString(),
-                        title = t,
-                        sourceGroupId = draft.sourceGroupId?.ifBlank { null },
-                        sourceGroupName = draft.sourceGroupName?.ifBlank { null },
-                        actionType = at,
-                        actionDetail = ad,
-                        createdAt = now,
-                        updatedAt = now,
-                        done = false
-                    )
-                )
+                val kind = draft.taskKind.trim().ifBlank { "short_term_instance" }
+                val evidenceAt = if (draft.evidenceAt > 0L) draft.evidenceAt else now
+                if (kind == "long_term_template") {
+                    upsertLongTemplate(existing, draft, t, at, ad, now)
+                } else {
+                    mergeShortInstanceByState(existing, draft, t, at, ad, evidenceAt, now)
+                }
             }
-            save(userId, (keptDone + newUndone).sortedByDescending { it.updatedAt })
+            instantiateRecurringTemplates(existing, now)
+            save(userId, existing.sortedByDescending { it.updatedAt })
+        }
+    }
+
+    private fun upsertLongTemplate(
+        existing: MutableList<UserTodoItemDto>,
+        draft: ExtractedTodoDraft,
+        title: String,
+        actionType: String?,
+        actionDetail: String?,
+        now: Long
+    ) {
+        val lk = logicalDedupKey(title, actionType, actionDetail, "long_term_template")
+        val idx = existing.indexOfFirst {
+            it.taskKind == "long_term_template" &&
+                logicalDedupKey(it.title, it.actionType, it.actionDetail, "long_term_template") == lk
+        }
+        val repeatRule = draft.repeatRule?.trim()?.lowercase(Locale.getDefault())?.ifBlank { null }
+        val repeatAnchor = draft.repeatAnchor?.trim()?.ifBlank { null }
+        if (idx >= 0) {
+            val cur = existing[idx]
+            existing[idx] = cur.copy(
+                title = title,
+                sourceGroupId = draft.sourceGroupId?.ifBlank { cur.sourceGroupId } ?: cur.sourceGroupId,
+                sourceGroupName = draft.sourceGroupName?.ifBlank { cur.sourceGroupName } ?: cur.sourceGroupName,
+                actionType = actionType ?: cur.actionType,
+                actionDetail = actionDetail ?: cur.actionDetail,
+                taskKind = "long_term_template",
+                repeatRule = repeatRule ?: cur.repeatRule,
+                repeatAnchor = repeatAnchor ?: cur.repeatAnchor,
+                lifecycleState = if (cur.lifecycleState == "cancelled") "cancelled" else "active",
+                done = false,
+                updatedAt = now
+            )
+            return
+        }
+        existing.add(
+            UserTodoItemDto(
+                id = UUID.randomUUID().toString(),
+                title = title,
+                sourceGroupId = draft.sourceGroupId?.ifBlank { null },
+                sourceGroupName = draft.sourceGroupName?.ifBlank { null },
+                actionType = actionType,
+                actionDetail = actionDetail,
+                createdAt = now,
+                updatedAt = now,
+                done = false,
+                taskKind = "long_term_template",
+                repeatRule = repeatRule,
+                repeatAnchor = repeatAnchor,
+                lifecycleState = "active",
+                explicitIntent = draft.explicitIntent
+            )
+        )
+    }
+
+    private fun mergeShortInstanceByState(
+        existing: MutableList<UserTodoItemDto>,
+        draft: ExtractedTodoDraft,
+        title: String,
+        actionType: String?,
+        actionDetail: String?,
+        evidenceAt: Long,
+        now: Long
+    ) {
+        val lk = logicalDedupKey(title, actionType, actionDetail, "short_term_instance")
+        val idx = existing.indices
+            .filter { existing[it].taskKind != "long_term_template" }
+            .sortedByDescending { existing[it].updatedAt }
+            .firstOrNull { logicalDedupKey(existing[it].title, existing[it].actionType, existing[it].actionDetail, "short_term_instance") == lk }
+        if (idx == null) {
+            existing.add(
+                UserTodoItemDto(
+                    id = UUID.randomUUID().toString(),
+                    title = title,
+                    sourceGroupId = draft.sourceGroupId?.ifBlank { null },
+                    sourceGroupName = draft.sourceGroupName?.ifBlank { null },
+                    actionType = actionType,
+                    actionDetail = actionDetail,
+                    createdAt = now,
+                    updatedAt = now,
+                    done = false,
+                    taskKind = "short_term_instance",
+                    lifecycleState = "active",
+                    lastEvidenceAt = evidenceAt,
+                    explicitIntent = draft.explicitIntent
+                )
+            )
+            return
+        }
+        val cur = existing[idx]
+        val state = cur.lifecycleState.trim().lowercase(Locale.getDefault()).ifBlank {
+            if (cur.done) "done" else "active"
+        }
+        val closeTs = cur.closedAt ?: cur.updatedAt
+        val canReopen = when (state) {
+            "done" -> evidenceAt > closeTs
+            "cancelled" -> draft.explicitIntent && evidenceAt > closeTs
+            "deferred" -> evidenceAt > closeTs
+            else -> false
+        }
+        val mergedEvidenceAt = maxOf(cur.lastEvidenceAt ?: 0L, evidenceAt)
+        if (state == "active") {
+            existing[idx] = cur.copy(
+                title = title,
+                sourceGroupId = draft.sourceGroupId?.ifBlank { cur.sourceGroupId } ?: cur.sourceGroupId,
+                sourceGroupName = draft.sourceGroupName?.ifBlank { cur.sourceGroupName } ?: cur.sourceGroupName,
+                actionType = actionType ?: cur.actionType,
+                actionDetail = actionDetail ?: cur.actionDetail,
+                done = false,
+                taskKind = "short_term_instance",
+                lifecycleState = "active",
+                lastEvidenceAt = mergedEvidenceAt,
+                explicitIntent = draft.explicitIntent || cur.explicitIntent,
+                updatedAt = now
+            )
+            return
+        }
+        if (canReopen) {
+            existing[idx] = cur.copy(
+                title = title,
+                sourceGroupId = draft.sourceGroupId?.ifBlank { cur.sourceGroupId } ?: cur.sourceGroupId,
+                sourceGroupName = draft.sourceGroupName?.ifBlank { cur.sourceGroupName } ?: cur.sourceGroupName,
+                actionType = actionType ?: cur.actionType,
+                actionDetail = actionDetail ?: cur.actionDetail,
+                done = false,
+                lifecycleState = "active",
+                closedAt = null,
+                lastEvidenceAt = mergedEvidenceAt,
+                explicitIntent = draft.explicitIntent,
+                reopenCount = cur.reopenCount + 1,
+                updatedAt = now
+            )
+        }
+    }
+
+    private fun instantiateRecurringTemplates(existing: MutableList<UserTodoItemDto>, now: Long) {
+        val today = Instant.ofEpochMilli(now).atZone(ZoneId.systemDefault()).toLocalDate()
+        val bucket = today.toString()
+        val templates = existing.filter { it.taskKind == "long_term_template" && it.lifecycleState != "cancelled" }
+        for (tpl in templates) {
+            if (!isTemplateDueToday(tpl, today)) continue
+            val existsToday = existing.any {
+                it.taskKind == "short_term_instance" &&
+                    it.templateId == tpl.id &&
+                    it.dateBucket == bucket
+            }
+            if (existsToday) continue
+            val actionDetail = tpl.actionDetail ?: tpl.repeatAnchor
+            existing.add(
+                UserTodoItemDto(
+                    id = UUID.randomUUID().toString(),
+                    title = tpl.title,
+                    sourceGroupId = tpl.sourceGroupId,
+                    sourceGroupName = tpl.sourceGroupName,
+                    actionType = tpl.actionType,
+                    actionDetail = actionDetail,
+                    createdAt = now,
+                    updatedAt = now,
+                    done = false,
+                    taskKind = "short_term_instance",
+                    templateId = tpl.id,
+                    lifecycleState = "active",
+                    lastEvidenceAt = now,
+                    explicitIntent = false,
+                    dateBucket = bucket
+                )
+            )
+        }
+    }
+
+    private fun isTemplateDueToday(tpl: UserTodoItemDto, today: LocalDate): Boolean {
+        val from = tpl.activeFrom?.let { Instant.ofEpochMilli(it).atZone(ZoneId.systemDefault()).toLocalDate() }
+        if (from != null && today.isBefore(from)) return false
+        val to = tpl.activeTo?.let { Instant.ofEpochMilli(it).atZone(ZoneId.systemDefault()).toLocalDate() }
+        if (to != null && today.isAfter(to)) return false
+        return when (tpl.repeatRule?.trim()?.lowercase(Locale.getDefault())) {
+            "workday" -> HolidayCalendarCn.isWorkday(today)
+            "yearly" -> {
+                val anchor = tpl.repeatAnchor?.trim() ?: return false
+                val mmdd = "%02d-%02d".format(today.monthValue, today.dayOfMonth)
+                anchor == mmdd
+            }
+            "monthly" -> {
+                val anchor = tpl.repeatAnchor?.trim() ?: return false
+                val day = anchor.toIntOrNull() ?: return false
+                day == today.dayOfMonth
+            }
+            "custom" -> false
+            else -> false
         }
     }
 
@@ -135,6 +332,33 @@ object UserTodoStore {
     }
 
     fun setItemDone(userId: String, itemId: String, done: Boolean): Boolean {
+        return updateItem(userId, itemId, done = done)
+    }
+
+    /** 部分字段更新待办项（title/actionType/actionDetail/done/executedAt/reminderId） */
+    fun updateItem(
+        userId: String,
+        itemId: String,
+        done: Boolean? = null,
+        title: String? = null,
+        actionType: String? = null,
+        actionDetail: String? = null,
+        executedAt: Long? = null,
+        reminderId: Long? = null,
+        clearReminderId: Boolean = false,
+        taskKind: String? = null,
+        repeatRule: String? = null,
+        repeatAnchor: String? = null,
+        activeFrom: Long? = null,
+        activeTo: Long? = null,
+        templateId: String? = null,
+        lifecycleState: String? = null,
+        closedAt: Long? = null,
+        lastEvidenceAt: Long? = null,
+        explicitIntent: Boolean? = null,
+        dateBucket: String? = null,
+        reopenCount: Int? = null
+    ): Boolean {
         val lock = locks.computeIfAbsent(userId) { Any() }
         synchronized(lock) {
             val items = load(userId).toMutableList()
@@ -142,7 +366,85 @@ object UserTodoStore {
             if (idx < 0) return false
             val cur = items[idx]
             val now = System.currentTimeMillis()
-            items[idx] = cur.copy(done = done, updatedAt = now)
+            val resolvedLifecycle = when {
+                lifecycleState != null -> lifecycleState.trim().lowercase(Locale.getDefault()).ifBlank { cur.lifecycleState }
+                done == null -> cur.lifecycleState
+                done -> if (cur.lifecycleState == "cancelled" || cur.lifecycleState == "deferred") cur.lifecycleState else "done"
+                else -> "active"
+            }
+            val resolvedDone = when {
+                done != null -> done
+                resolvedLifecycle == "active" -> false
+                resolvedLifecycle == "done" || resolvedLifecycle == "cancelled" || resolvedLifecycle == "deferred" -> true
+                else -> cur.done
+            }
+            val resolvedClosedAt = when {
+                closedAt != null -> if (closedAt <= 0L) null else closedAt
+                resolvedLifecycle == "active" -> null
+                resolvedLifecycle == cur.lifecycleState -> cur.closedAt
+                else -> now
+            }
+            items[idx] = cur.copy(
+                done = resolvedDone,
+                title = title ?: cur.title,
+                actionType = when {
+                    actionType == null -> cur.actionType
+                    actionType.isBlank() -> null
+                    else -> actionType.trim().lowercase(Locale.getDefault()).ifBlank { null }
+                },
+                actionDetail = when {
+                    actionDetail == null -> cur.actionDetail
+                    actionDetail.isBlank() -> null
+                    else -> actionDetail.trim().ifBlank { null }
+                },
+                executedAt = executedAt ?: cur.executedAt,
+                reminderId = when {
+                    clearReminderId -> null
+                    reminderId == null -> cur.reminderId
+                    else -> reminderId
+                },
+                taskKind = taskKind?.trim()?.ifBlank { cur.taskKind } ?: cur.taskKind,
+                repeatRule = when {
+                    repeatRule == null -> cur.repeatRule
+                    repeatRule.isBlank() -> null
+                    else -> repeatRule.trim().lowercase(Locale.getDefault()).ifBlank { null }
+                },
+                repeatAnchor = when {
+                    repeatAnchor == null -> cur.repeatAnchor
+                    repeatAnchor.isBlank() -> null
+                    else -> repeatAnchor.trim().ifBlank { null }
+                },
+                activeFrom = activeFrom ?: cur.activeFrom,
+                activeTo = activeTo ?: cur.activeTo,
+                templateId = when {
+                    templateId == null -> cur.templateId
+                    templateId.isBlank() -> null
+                    else -> templateId.trim().ifBlank { null }
+                },
+                lifecycleState = resolvedLifecycle,
+                closedAt = resolvedClosedAt,
+                lastEvidenceAt = lastEvidenceAt ?: cur.lastEvidenceAt,
+                explicitIntent = explicitIntent ?: cur.explicitIntent,
+                dateBucket = when {
+                    dateBucket == null -> cur.dateBucket
+                    dateBucket.isBlank() -> null
+                    else -> dateBucket.trim().ifBlank { null }
+                },
+                reopenCount = reopenCount ?: cur.reopenCount,
+                updatedAt = now
+            )
+            save(userId, items)
+            return true
+        }
+    }
+
+    /** 删除指定待办项 */
+    fun deleteItem(userId: String, itemId: String): Boolean {
+        val lock = locks.computeIfAbsent(userId) { Any() }
+        synchronized(lock) {
+            val items = load(userId).toMutableList()
+            val removed = items.removeAll { it.id == itemId }
+            if (!removed) return false
             save(userId, items)
             return true
         }
@@ -166,18 +468,19 @@ object UserTodoStore {
         }
     }
 
-    internal fun logicalDedupKey(title: String, actionType: String?, actionDetail: String?): String {
+    internal fun logicalDedupKey(title: String, actionType: String?, actionDetail: String?, taskKind: String? = null): String {
         val at = actionType?.trim()?.lowercase(Locale.getDefault())?.ifBlank { null }
         var adNorm = normalizeActionDetailForKey(at, actionDetail)
+        val kindPrefix = if (taskKind?.trim()?.lowercase(Locale.getDefault()) == "long_term_template") "lt:" else ""
         // actionType=alarm but missing actionDetail: try to extract time from title
         if ((at == "alarm" || at == "calendar") && adNorm == null) {
             adNorm = extractTimeFromTitle(title)
-            if (adNorm != null) return "$at:$adNorm"
+            if (adNorm != null) return "${kindPrefix}$at:$adNorm"
         }
         if ((at == "alarm" || at == "calendar") && adNorm != null) {
-            return "$at:$adNorm"
+            return "${kindPrefix}$at:$adNorm"
         }
-        return "t:${normKey(title)}"
+        return "${kindPrefix}t:${normKey(title)}"
     }
 
     /** Try to parse a time string like "七点起床" → "07:00", "下午3点半开会" → "15:30" */
@@ -316,6 +619,8 @@ object UserTodoStore {
         b: UserTodoItemDto,
         now: Long
     ): UserTodoItemDto? {
+        // 模板与实例属于不同语义层，禁止互并（否则会吞掉长期模板）
+        if (a.taskKind != b.taskKind) return null
         val anyDone = a.done || b.done
         // For same-key structured alarm/calendar: let mergeItemsByLogicalKey handle
         // Here we catch cross-key semantic overlap via normKey containment
@@ -337,6 +642,9 @@ object UserTodoStore {
         val newer = if (a.updatedAt >= b.updatedAt) a else b
         val other = if (newer.id == a.id) b else a
         val shortTitle = if (a.title.trim().length <= b.title.trim().length) a.title.trim() else b.title.trim()
+        val mergedExec = listOfNotNull(a.executedAt, b.executedAt).minOrNull()
+        val mergedRem = newer.reminderId ?: other.reminderId
+            ?: a.reminderId ?: b.reminderId
         return newer.copy(
             title = shortTitle.take(500),
             actionType = (newer.actionType ?: other.actionType)
@@ -346,12 +654,16 @@ object UserTodoStore {
                 .maxByOrNull { it.length }
                 ?.ifBlank { null },
             done = anyDone,
+            executedAt = mergedExec,
+            reminderId = mergedRem,
             updatedAt = now
         )
     }
 
     private fun mergeItemsByLogicalKey(items: List<UserTodoItemDto>): List<UserTodoItemDto> {
-        val byKey = items.groupBy { logicalDedupKey(it.title, it.actionType, it.actionDetail) }
+        val byKey = items.groupBy {
+            logicalDedupKey(it.title, it.actionType, it.actionDetail, it.taskKind)
+        }
         val now = System.currentTimeMillis()
         return byKey.values.map { g ->
             val sorted = g.sortedByDescending { it.updatedAt }
@@ -365,11 +677,15 @@ object UserTodoStore {
                 ?: newest.actionType?.trim()?.lowercase(Locale.getDefault())?.ifBlank { null }
             val shortTitle = g.map { it.title.trim() }.filter { it.isNotEmpty() }
                 .minByOrNull { it.length } ?: newest.title
+            val mergedExec = g.mapNotNull { it.executedAt }.minOrNull()
+            val mergedRem = sorted.firstOrNull { it.reminderId != null }?.reminderId
             newest.copy(
                 title = shortTitle.take(500),
                 actionType = preferredType?.ifBlank { null },
                 actionDetail = (bestDetail ?: newest.actionDetail)?.trim()?.ifBlank { null },
                 done = anyDone,
+                executedAt = mergedExec,
+                reminderId = mergedRem,
                 updatedAt = if (mergedRow) now else newest.updatedAt
             )
         }
@@ -381,5 +697,10 @@ data class ExtractedTodoDraft(
     val sourceGroupId: String? = null,
     val sourceGroupName: String? = null,
     val actionType: String? = null,
-    val actionDetail: String? = null
+    val actionDetail: String? = null,
+    val taskKind: String = "short_term_instance",
+    val repeatRule: String? = null,
+    val repeatAnchor: String? = null,
+    val evidenceAt: Long = 0L,
+    val explicitIntent: Boolean = false
 )

@@ -7,6 +7,7 @@ export enum PageRoute {
   LOGIN = 'pages/LoginPage',
   GROUP_LIST = 'pages/GroupListPage',
   CHAT = 'pages/ChatPage',
+  TODO = 'pages/TodoPage',
   SETTINGS = 'pages/SettingsPage'
 }
 
@@ -14,6 +15,7 @@ export enum PageName {
   Login = 'Login',
   GroupList = 'GroupList',
   Chat = 'Chat',
+  Todo = 'Todo',
   Settings = 'Settings'
 }
 
@@ -65,6 +67,13 @@ export class Router {
    */
   goToChat(_groupId: string, _groupName: string): void {
     this.notifyPageChange(PageName.Chat);
+  }
+
+  /**
+   * 导航到待办页面
+   */
+  goToTodo(): void {
+    this.notifyPageChange(PageName.Todo);
   }
   
   /**

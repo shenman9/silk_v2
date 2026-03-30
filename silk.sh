@@ -180,10 +180,13 @@ is_silk_managed_pid() {
 }
 
 # 自动清理端口占用
+# 第 $4 参数 kill_any=true：deploy 等场景下无条件终止该端口全部监听进程（用于 FRONTEND_PORT：
+# Homebrew Python 在 ps 中常显示为 Python 而非 python3，原有 is_silk_managed_pid 会误判为「非 Silk」）
 kill_port_process() {
     local port=$1
     local service_name=$2
     local force=${3:-false}
+    local kill_any=${4:-false}
     
     if check_port $port; then
         local PIDS
@@ -192,11 +195,15 @@ kill_port_process() {
         PROC_NAME=$(ps -p "$(echo "$PIDS" | head -1)" -o comm= 2>/dev/null || echo "unknown")
         
         if [ "$force" == "true" ]; then
-            echo -e "  ${YELLOW}⚠ 端口 $port 被 $PROC_NAME (PID: $(echo "$PIDS" | tr '\n' ' ')) 占用，检查是否为 Silk 进程...${NC}"
+            if [ "$kill_any" == "true" ]; then
+                echo -e "  ${YELLOW}⚠ 端口 $port（$service_name）被 $PROC_NAME (PID: $(echo "$PIDS" | tr '\n' ' ')) 占用，deploy 强制释放该端口...${NC}"
+            else
+                echo -e "  ${YELLOW}⚠ 端口 $port 被 $PROC_NAME (PID: $(echo "$PIDS" | tr '\n' ' ')) 占用，检查是否为 Silk 进程...${NC}"
+            fi
             local killed_any=false
             local skipped_any=false
             for PID in $PIDS; do
-                if is_silk_managed_pid "$PID"; then
+                if [ "$kill_any" == "true" ] || is_silk_managed_pid "$PID"; then
                     kill -TERM "$PID" 2>/dev/null
                     killed_any=true
                 else
@@ -207,14 +214,14 @@ kill_port_process() {
             sleep 1
             if check_port "$port" && [ "$killed_any" = true ]; then
                 for PID in $PIDS; do
-                    if is_silk_managed_pid "$PID"; then
+                    if [ "$kill_any" == "true" ] || is_silk_managed_pid "$PID"; then
                         kill -9 "$PID" 2>/dev/null
                     fi
                 done
                 sleep 1
             fi
 
-            if [ "$skipped_any" = true ]; then
+            if [ "$kill_any" != "true" ] && [ "$skipped_any" = true ]; then
                 echo -e "  ${YELLOW}⚠ 发现非 Silk 进程占用端口 $port，已跳过（防止误杀外部程序/模拟器）${NC}"
             fi
             if check_port $port; then
@@ -229,7 +236,7 @@ kill_port_process() {
             if [ "$answer" == "y" ] || [ "$answer" == "Y" ]; then
                 local killed_any=false
                 for PID in $PIDS; do
-                    if is_silk_managed_pid "$PID"; then
+                    if [ "$kill_any" == "true" ] || is_silk_managed_pid "$PID"; then
                         kill -TERM "$PID" 2>/dev/null
                         killed_any=true
                     else
@@ -239,7 +246,7 @@ kill_port_process() {
                 if [ "$killed_any" = true ]; then
                     sleep 1
                     for PID in $PIDS; do
-                        if is_silk_managed_pid "$PID"; then
+                        if [ "$kill_any" == "true" ] || is_silk_managed_pid "$PID"; then
                             kill -9 "$PID" 2>/dev/null
                         fi
                     done
@@ -261,7 +268,8 @@ kill_all_ports() {
     echo -e "${BLUE}检查端口冲突...${NC}"
     
     kill_port_process $BACKEND_PORT "Silk Backend" $force
-    kill_port_process $FRONTEND_PORT "Silk Frontend" $force
+    # 前端端口：deploy 等场景下必须清空，避免旧 Python http.server（进程名可为 Python）占坑导致无法启动
+    kill_port_process $FRONTEND_PORT "Silk Frontend" $force true
     
     # 永不清理 Weaviate 端口：若 8008 已有 Weaviate 在跑则直接复用，不停止、不杀进程
     echo -e "  ${GREEN}✓ 跳过 Weaviate 端口 ($WEAVIATE_HTTP_PORT/$WEAVIATE_GRPC_PORT)，保持已有实例${NC}"
@@ -997,10 +1005,10 @@ deploy() {
         return 1
     fi
     
-    # 3. HarmonyOS：ohpm + hvigor sync + assembleHap(entry)（与 DevEco CLI 一致）
+    # 3. HarmonyOS：ohpm + hvigor sync + assembleHap(entry) + hdc install + aa start(entry)
     echo ""
-    echo -e "${BLUE}[3/5] 构建鸿蒙应用（ohpm / sync / assembleHap；不自动 hdc 安装）...${NC}"
-    SILK_SKIP_HARMONY_RUN=1 build_hap
+    echo -e "${BLUE}[3/5] 构建并安装鸿蒙应用（ohpm / sync / assembleHap / hdc install / aa start）...${NC}"
+    build_hap
     if [ $? -ne 0 ]; then
         echo -e "${RED}❌ 鸿蒙 HAP 构建失败，终止部署${NC}"
         return 1

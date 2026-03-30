@@ -976,18 +976,96 @@ fun Application.configureRouting() {
             call.respond(UserTodosResponse(true, syncDetail, items))
         }
 
+        /**
+         * 后台异步刷新：快速返回任务状态，避免客户端长时间阻塞。
+         */
+        post("/api/user-todos/{userId}/refresh-async/start") {
+            val userId = call.parameters["userId"] ?: ""
+            val status = com.silk.backend.todos.UserTodoRefreshAsyncManager.start(userId)
+            call.respond(status)
+        }
+
+        /**
+         * 查询后台异步刷新状态。
+         */
+        get("/api/user-todos/{userId}/refresh-async/status") {
+            val userId = call.parameters["userId"] ?: ""
+            val status = com.silk.backend.todos.UserTodoRefreshAsyncManager.status(userId)
+            call.respond(status)
+        }
+
+        /**
+         * 查询最近一次待办抽取诊断信息（用于定位漏抽）。
+         */
+        get("/api/user-todos/{userId}/diagnostics") {
+            val userId = call.parameters["userId"] ?: ""
+            val d = com.silk.backend.todos.GroupTodoExtractionService.getDiagnostics(userId)
+            call.respond(
+                UserTodoExtractionDiagnosticsResponse(
+                    success = true,
+                    message = "ok",
+                    userId = d.userId,
+                    updatedAt = d.updatedAt,
+                    source = d.source,
+                    totalGroups = d.totalGroups,
+                    transcriptChars = d.transcriptChars,
+                    llmDraftCount = d.llmDraftCount,
+                    heuristicDraftCount = d.heuristicDraftCount,
+                    forcedRecurringCount = d.forcedRecurringCount,
+                    finalDraftCount = d.finalDraftCount,
+                    matchedRecurringLines = d.matchedRecurringLines,
+                    note = d.note
+                )
+            )
+        }
+
         put("/api/user-todos/item") {
             try {
                 val request = call.receive<UpdateUserTodoRequest>()
-                val ok = com.silk.backend.todos.UserTodoStore.setItemDone(
-                    request.userId,
-                    request.itemId,
-                    request.done
+                val ok = com.silk.backend.todos.UserTodoStore.updateItem(
+                    userId = request.userId,
+                    itemId = request.itemId,
+                    done = request.done,
+                    title = request.title,
+                    actionType = request.actionType,
+                    actionDetail = request.actionDetail,
+                    executedAt = request.executedAt,
+                    reminderId = request.reminderId,
+                    clearReminderId = request.clearReminderId,
+                    taskKind = request.taskKind,
+                    repeatRule = request.repeatRule,
+                    repeatAnchor = request.repeatAnchor,
+                    activeFrom = request.activeFrom,
+                    activeTo = request.activeTo,
+                    templateId = request.templateId,
+                    lifecycleState = request.lifecycleState,
+                    closedAt = request.closedAt,
+                    lastEvidenceAt = request.lastEvidenceAt,
+                    explicitIntent = request.explicitIntent,
+                    dateBucket = request.dateBucket,
+                    reopenCount = request.reopenCount
                 )
                 val items = com.silk.backend.todos.UserTodoStore.load(request.userId)
                     .sortedByDescending { it.updatedAt }
                 call.respond(
                     if (ok) UserTodosResponse(true, "已更新", items)
+                    else UserTodosResponse(false, "待办不存在", items)
+                )
+            } catch (e: Exception) {
+                call.respond(HttpStatusCode.BadRequest, UserTodosResponse(false, "请求格式错误"))
+            }
+        }
+
+        delete("/api/user-todos/item") {
+            try {
+                val request = call.receive<DeleteUserTodoRequest>()
+                val ok = com.silk.backend.todos.UserTodoStore.deleteItem(
+                    request.userId, request.itemId
+                )
+                val items = com.silk.backend.todos.UserTodoStore.load(request.userId)
+                    .sortedByDescending { it.updatedAt }
+                call.respond(
+                    if (ok) UserTodosResponse(true, "已删除", items)
                     else UserTodosResponse(false, "待办不存在", items)
                 )
             } catch (e: Exception) {
