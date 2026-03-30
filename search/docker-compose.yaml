@@ -4,8 +4,8 @@
 # 停止: docker-compose down
 # 查看日志: docker-compose logs -f
 # 
-# Weaviate API: http://localhost:8008
-# Weaviate gRPC: localhost:50051
+# Weaviate API: http://127.0.0.1:8008（仅本机，变量见 search/.env）
+# Weaviate gRPC: 127.0.0.1:50051
 
 version: '3.8'
 
@@ -15,14 +15,19 @@ services:
     container_name: silk-weaviate
     restart: unless-stopped
     ports:
-      - "8008:8080"  # REST API (对外开放端口 8008)
-      - "50051:50051"  # gRPC
+      - "127.0.0.1:8008:8080"  # REST API（仅监听本机回环）
+      - "127.0.0.1:50051:50051"  # gRPC
     volumes:
       - ./weaviate_data:/var/lib/weaviate
     environment:
       # 基础配置
       QUERY_DEFAULTS_LIMIT: 25
-      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: 'true'
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: 'false'
+      AUTHENTICATION_APIKEY_ENABLED: 'true'
+      AUTHENTICATION_APIKEY_ALLOWED_KEYS: ${WEAVIATE_API_KEY:?Set WEAVIATE_API_KEY in .env}
+      AUTHENTICATION_APIKEY_USERS: silk-weaviate-admin
+      AUTHORIZATION_ADMINLIST_ENABLED: 'true'
+      AUTHORIZATION_ADMINLIST_USERS: silk-weaviate-admin
       PERSISTENCE_DATA_PATH: '/var/lib/weaviate'
       DEFAULT_VECTORIZER_MODULE: 'text2vec-transformers'
       

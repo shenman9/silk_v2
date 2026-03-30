@@ -8,6 +8,30 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
+# 加载 API Key（与 docker-compose / 后端 .env 一致）
+if [ -f "$SCRIPT_DIR/../.env" ]; then
+    TMP_ENV=$(mktemp)
+    tr -d '\r' < "$SCRIPT_DIR/../.env" > "$TMP_ENV"
+    set -a
+    # shellcheck disable=SC1090
+    source "$TMP_ENV"
+    set +a
+    rm -f "$TMP_ENV"
+fi
+if [ -f "$SCRIPT_DIR/.env" ]; then
+    TMP_ENV=$(mktemp)
+    tr -d '\r' < "$SCRIPT_DIR/.env" > "$TMP_ENV"
+    set -a
+    # shellcheck disable=SC1090
+    source "$TMP_ENV"
+    set +a
+    rm -f "$TMP_ENV"
+fi
+CURL_WEAVIATE_AUTH=()
+if [ -n "$WEAVIATE_API_KEY" ]; then
+    CURL_WEAVIATE_AUTH=(-H "Authorization: Bearer $WEAVIATE_API_KEY")
+fi
+
 echo "🔍 Silk Context Search Engine"
 echo "=============================="
 echo ""
@@ -39,7 +63,7 @@ case "${1:-help}" in
         echo "⏳ 等待服务就绪 (首次启动需要下载模型，约 2-5 分钟)..."
         
         for i in {1..60}; do
-            if curl -s http://localhost:8008/v1/.well-known/ready > /dev/null 2>&1; then
+            if curl -s "${CURL_WEAVIATE_AUTH[@]}" http://localhost:8008/v1/.well-known/ready > /dev/null 2>&1; then
                 echo ""
                 echo "✅ Weaviate 已就绪!"
                 break
@@ -105,7 +129,7 @@ case "${1:-help}" in
         
         echo ""
         echo "📈 索引统计:"
-        curl -s http://localhost:8008/v1/nodes 2>/dev/null | python3 -c "
+        curl -s "${CURL_WEAVIATE_AUTH[@]}" http://localhost:8008/v1/nodes 2>/dev/null | python3 -c "
 import sys, json
 try:
     data = json.load(sys.stdin)

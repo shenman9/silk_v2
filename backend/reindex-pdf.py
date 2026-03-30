@@ -24,9 +24,24 @@ except ImportError:
     os.system("pip3 install jieba -q")
     import jieba
 
-WEAVIATE_URL = "http://localhost:8008"
-SESSION_ID = "group_4fe989d0-c127-45a2-8630-9dcbb92149a0"
-UPLOADS_DIR = "/root/Silk/chat_history/4fe989d0-c127-45a2-8630-9dcbb92149a0/uploads"
+WEAVIATE_URL = os.environ.get("WEAVIATE_URL", "http://localhost:8008")
+
+
+def _wv_headers():
+    h = {"Content-Type": "application/json"}
+    key = os.environ.get("WEAVIATE_API_KEY", "").strip()
+    if key:
+        h["Authorization"] = f"Bearer {key}"
+    return h
+import sys
+
+if len(sys.argv) < 2:
+    print("用法: python3 reindex-pdf.py <session_id> [uploads_dir]")
+    sys.exit(1)
+
+SESSION_ID = sys.argv[1]
+_uuid = SESSION_ID.removeprefix("group_")
+UPLOADS_DIR = sys.argv[2] if len(sys.argv) >= 3 else f"chat_history/{_uuid}/uploads"
 
 def clean_chinese_text(text):
     """
@@ -98,7 +113,7 @@ def index_document(title, content, file_path):
         response = requests.post(
             f"{WEAVIATE_URL}/v1/objects",
             json=data,
-            headers={"Content-Type": "application/json"}
+            headers=_wv_headers(),
         )
         if response.status_code in [200, 201]:
             print(f"  ✅ 索引成功: {cleaned_title}")

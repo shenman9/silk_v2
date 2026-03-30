@@ -20,6 +20,9 @@ object AIConfig {
     // Weaviate 向量库地址
     val WEAVIATE_URL: String get() = env("WEAVIATE_URL") ?: ""
 
+    /** Weaviate API Key（与 docker AUTHENTICATION_APIKEY_ALLOWED_KEYS 一致，匿名关闭时必填） */
+    val WEAVIATE_API_KEY: String get() = env("WEAVIATE_API_KEY") ?: ""
+
     /** 获取 AI API 地址，为空时抛错提示配置 .env */
     fun requireApiBaseUrl(): String = API_BASE_URL.trim().takeIf { it.isNotBlank() }
         ?: throw IllegalStateException("请在项目根目录 .env 中配置 API_BASE_URL")

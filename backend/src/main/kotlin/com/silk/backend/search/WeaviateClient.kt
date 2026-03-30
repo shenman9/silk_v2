@@ -4,6 +4,7 @@ import com.silk.backend.ai.AIConfig
 import io.ktor.client.*
 import io.ktor.client.call.*
 import io.ktor.client.engine.cio.*
+import io.ktor.client.plugins.*
 import io.ktor.client.plugins.contentnegotiation.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
@@ -46,6 +47,12 @@ class WeaviateClient(
                 ignoreUnknownKeys = true 
                 encodeDefaults = true
             })
+        }
+        install(DefaultRequest) {
+            val key = AIConfig.WEAVIATE_API_KEY.trim()
+            if (key.isNotEmpty()) {
+                headers.append(HttpHeaders.Authorization, "Bearer $key")
+            }
         }
     }
     

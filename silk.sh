@@ -122,6 +122,12 @@ FRONTEND_PORT=${FRONTEND_PORT:-8005}
 WEAVIATE_HTTP_PORT=${WEAVIATE_HTTP_PORT:-8008}
 WEAVIATE_GRPC_PORT=${WEAVIATE_GRPC_PORT:-50051}
 
+# curl 访问 Weaviate 时附加 API Key（与 AUTHENTICATION_APIKEY 一致）
+CURL_WEAVIATE_AUTH=()
+if [ -n "$WEAVIATE_API_KEY" ]; then
+    CURL_WEAVIATE_AUTH=(-H "Authorization: Bearer $WEAVIATE_API_KEY")
+fi
+
 # Weaviate URL 处理：优先使用 .env 中的 WEAVIATE_URL，否则使用本地
 WEAVIATE_CHECK_URL="${WEAVIATE_URL:-http://localhost:$WEAVIATE_HTTP_PORT}"
 # 判断是否使用远程 Weaviate
@@ -288,7 +294,7 @@ weaviate_status() {
         echo -e "  Docker 容器: ${GREEN}● 运行中${NC} ($CONTAINER_STATUS)"
         
         # 检查就绪状态
-        local READY=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:$WEAVIATE_HTTP_PORT/v1/.well-known/ready" 2>/dev/null)
+        local READY=$(curl -s "${CURL_WEAVIATE_AUTH[@]}" -o /dev/null -w "%{http_code}" "http://localhost:$WEAVIATE_HTTP_PORT/v1/.well-known/ready" 2>/dev/null)
         if [ "$READY" == "200" ]; then
             echo -e "  就绪状态: ${GREEN}✓ Ready${NC}"
         else
@@ -296,7 +302,7 @@ weaviate_status() {
         fi
         
         # 显示版本
-        local VERSION=$(curl -s "http://localhost:$WEAVIATE_HTTP_PORT/v1/meta" 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('version','?'))" 2>/dev/null)
+        local VERSION=$(curl -s "${CURL_WEAVIATE_AUTH[@]}" "http://localhost:$WEAVIATE_HTTP_PORT/v1/meta" 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('version','?'))" 2>/dev/null)
         echo -e "  版本: $VERSION"
     else
         # 检查本地进程
@@ -319,7 +325,7 @@ weaviate_start() {
         WEAVIATE_ENDPOINT="${WEAVIATE_ENDPOINT#https://}"
         
         # 检查远程 Weaviate 是否可用
-        local READY=$(curl -s -o /dev/null -w "%{http_code}" "$WEAVIATE_URL/v1/.well-known/ready" 2>/dev/null)
+        local READY=$(curl -s "${CURL_WEAVIATE_AUTH[@]}" -o /dev/null -w "%{http_code}" "$WEAVIATE_URL/v1/.well-known/ready" 2>/dev/null)
         if [ "$READY" == "200" ]; then
             echo -e "  ${GREEN}✓ 远程 Weaviate 已就绪: $WEAVIATE_URL${NC}"
             return 0
@@ -331,7 +337,7 @@ weaviate_start() {
     
     # 本地：若 8008 上已有 Weaviate 在跑且就绪，直接复用，不启动、不杀进程
     if check_port $WEAVIATE_HTTP_PORT; then
-        local READY=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:$WEAVIATE_HTTP_PORT/v1/.well-known/ready" 2>/dev/null)
+        local READY=$(curl -s "${CURL_WEAVIATE_AUTH[@]}" -o /dev/null -w "%{http_code}" "http://localhost:$WEAVIATE_HTTP_PORT/v1/.well-known/ready" 2>/dev/null)
         if [ "$READY" == "200" ]; then
             echo -e "  ${GREEN}✓ 端口 $WEAVIATE_HTTP_PORT 已有 Weaviate 在运行，直接使用${NC}"
             return 0
@@ -341,7 +347,7 @@ weaviate_start() {
     # 首先检查 Docker 容器是否已存在且运行中
     local CONTAINER_STATUS=$(docker inspect -f '{{.State.Status}}' silk-weaviate 2>/dev/null)
     if [ "$CONTAINER_STATUS" == "running" ]; then
-        local READY=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:$WEAVIATE_HTTP_PORT/v1/.well-known/ready" 2>/dev/null)
+        local READY=$(curl -s "${CURL_WEAVIATE_AUTH[@]}" -o /dev/null -w "%{http_code}" "http://localhost:$WEAVIATE_HTTP_PORT/v1/.well-known/ready" 2>/dev/null)
         if [ "$READY" == "200" ]; then
             echo -e "  ${GREEN}✓ 本地 Weaviate 已就绪，跳过启动${NC}"
             return 0
@@ -352,7 +358,7 @@ weaviate_start() {
             # 等待就绪
             for i in {1..15}; do
                 sleep 2
-                READY=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:$WEAVIATE_HTTP_PORT/v1/.well-known/ready" 2>/dev/null)
+                READY=$(curl -s "${CURL_WEAVIATE_AUTH[@]}" -o /dev/null -w "%{http_code}" "http://localhost:$WEAVIATE_HTTP_PORT/v1/.well-known/ready" 2>/dev/null)
                 if [ "$READY" == "200" ]; then
                     echo -e "  ${GREEN}✓ Weaviate 重启后已就绪！${NC}"
                     weaviate_schema
@@ -370,7 +376,7 @@ weaviate_start() {
     else
         # 端口已被占用时：若是 Weaviate 则直接复用，不杀进程
         if check_port $WEAVIATE_HTTP_PORT; then
-            local READY=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:$WEAVIATE_HTTP_PORT/v1/.well-known/ready" 2>/dev/null)
+            local READY=$(curl -s "${CURL_WEAVIATE_AUTH[@]}" -o /dev/null -w "%{http_code}" "http://localhost:$WEAVIATE_HTTP_PORT/v1/.well-known/ready" 2>/dev/null)
             if [ "$READY" == "200" ]; then
                 echo -e "  ${GREEN}✓ 端口 $WEAVIATE_HTTP_PORT 已有 Weaviate 在运行，直接使用${NC}"
                 return 0
@@ -384,13 +390,22 @@ weaviate_start() {
     if command -v docker &> /dev/null; then
         echo -e "  使用 Docker 启动 Weaviate (端口 $WEAVIATE_HTTP_PORT)..."
         
+        if [ -z "$WEAVIATE_API_KEY" ]; then
+            echo -e "  ${RED}✗ 未设置 WEAVIATE_API_KEY，无法以安全模式启动 Weaviate（请在 .env 中配置）${NC}"
+            return 1
+        fi
         docker run -d --name silk-weaviate \
             --restart unless-stopped \
-            -p $WEAVIATE_HTTP_PORT:8080 \
-            -p $WEAVIATE_GRPC_PORT:50051 \
+            -p 127.0.0.1:$WEAVIATE_HTTP_PORT:8080 \
+            -p 127.0.0.1:$WEAVIATE_GRPC_PORT:50051 \
             -v "$SILK_DIR/search/weaviate_data:/var/lib/weaviate" \
             -e QUERY_DEFAULTS_LIMIT=25 \
-            -e AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED=true \
+            -e AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED=false \
+            -e AUTHENTICATION_APIKEY_ENABLED=true \
+            -e AUTHENTICATION_APIKEY_ALLOWED_KEYS="$WEAVIATE_API_KEY" \
+            -e AUTHENTICATION_APIKEY_USERS=silk-weaviate-admin \
+            -e AUTHORIZATION_ADMINLIST_ENABLED=true \
+            -e AUTHORIZATION_ADMINLIST_USERS=silk-weaviate-admin \
             -e PERSISTENCE_DATA_PATH=/var/lib/weaviate \
             -e DEFAULT_VECTORIZER_MODULE=none \
             -e CLUSTER_HOSTNAME=node1 \
@@ -402,7 +417,7 @@ weaviate_start() {
             # 等待就绪
             for i in {1..30}; do
                 sleep 2
-                local READY=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:$WEAVIATE_HTTP_PORT/v1/.well-known/ready" 2>/dev/null)
+                local READY=$(curl -s "${CURL_WEAVIATE_AUTH[@]}" -o /dev/null -w "%{http_code}" "http://localhost:$WEAVIATE_HTTP_PORT/v1/.well-known/ready" 2>/dev/null)
                 if [ "$READY" == "200" ]; then
                     echo -e "  ${GREEN}✓ Weaviate 就绪！${NC}"
                     
@@ -426,7 +441,7 @@ weaviate_stop() {
     
     # 若 8008 上已有 Weaviate 在跑，一律不停止、不杀进程，直接复用
     if check_port $WEAVIATE_HTTP_PORT; then
-        local READY=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:$WEAVIATE_HTTP_PORT/v1/.well-known/ready" 2>/dev/null)
+        local READY=$(curl -s "${CURL_WEAVIATE_AUTH[@]}" -o /dev/null -w "%{http_code}" "http://localhost:$WEAVIATE_HTTP_PORT/v1/.well-known/ready" 2>/dev/null)
         if [ "$READY" == "200" ]; then
             echo -e "  ${GREEN}✓ 端口 $WEAVIATE_HTTP_PORT 上 Weaviate 正在运行，保持不停止${NC}"
             return 0
@@ -442,7 +457,7 @@ weaviate_stop() {
     
     # 停止本地进程（仅当端口占用且不是 Weaviate 就绪时）
     if check_port $WEAVIATE_HTTP_PORT; then
-        local READY=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:$WEAVIATE_HTTP_PORT/v1/.well-known/ready" 2>/dev/null)
+        local READY=$(curl -s "${CURL_WEAVIATE_AUTH[@]}" -o /dev/null -w "%{http_code}" "http://localhost:$WEAVIATE_HTTP_PORT/v1/.well-known/ready" 2>/dev/null)
         if [ "$READY" != "200" ]; then
             local PID=$(get_pid_on_port $WEAVIATE_HTTP_PORT)
             kill -9 $PID 2>/dev/null
@@ -458,14 +473,14 @@ weaviate_schema() {
     local CHECK_URL="${WEAVIATE_URL:-http://localhost:$WEAVIATE_HTTP_PORT}"
     
     # 检查是否已就绪
-    local READY=$(curl -s -o /dev/null -w "%{http_code}" "$CHECK_URL/v1/.well-known/ready" 2>/dev/null)
+    local READY=$(curl -s "${CURL_WEAVIATE_AUTH[@]}" -o /dev/null -w "%{http_code}" "$CHECK_URL/v1/.well-known/ready" 2>/dev/null)
     if [ "$READY" != "200" ]; then
         echo -e "  ${YELLOW}⚠ Weaviate ($CHECK_URL) 未就绪，跳过 Schema 初始化${NC}"
         return 1
     fi
     
     # 检查 Schema 是否已存在
-    local SCHEMA=$(curl -s "$CHECK_URL/v1/schema" 2>/dev/null)
+    local SCHEMA=$(curl -s "${CURL_WEAVIATE_AUTH[@]}" "$CHECK_URL/v1/schema" 2>/dev/null)
     if echo "$SCHEMA" | grep -q "SilkContext"; then
         echo -e "  ${GREEN}✓ Schema 已存在${NC}"
         return 0
@@ -649,6 +664,12 @@ clean_aapt2_cache() {
     fi
 }
 
+# Kotlin 增量编译 snapshot 在部分环境（NFS、中断构建）下 Gradle 无法删除，导致 compileKotlin / compileDebugKotlin 失败
+clean_gradle_kotlin_snapshots() {
+    rm -rf "$SILK_DIR/backend/build/snapshot"
+    rm -rf "$SILK_DIR/frontend/androidApp/build/snapshot"
+}
+
 # ============================================================
 # 构建 Android APK
 # ============================================================
@@ -689,6 +710,7 @@ build_apk() {
     echo ""
     echo -e "${BLUE}正在构建 Android APK (Debug)...${NC}"
     cd "$SILK_DIR"
+    clean_gradle_kotlin_snapshots
     ./gradlew -PBACKEND_BASE_URL="$APK_BACKEND_URL" $AAPT2_OVERRIDE_PARAM :frontend:androidApp:assembleDebug
     
     if [ $? -eq 0 ]; then
@@ -1035,6 +1057,7 @@ start_services_internal() {
     echo ""
     echo -e "${BLUE}启动 Silk 后端...${NC}"
     cd "$SILK_DIR"
+    clean_gradle_kotlin_snapshots
     nohup ./gradlew :backend:run > /tmp/silk_backend.log 2>&1 &
     echo -e "  ${GREEN}后端启动命令已执行${NC}"
     echo -e "  日志: /tmp/silk_backend.log"
@@ -1120,6 +1143,7 @@ start_services() {
         echo -e "  ${YELLOW}后端已在运行${NC}"
     else
         cd "$SILK_DIR"
+        clean_gradle_kotlin_snapshots
         nohup ./gradlew :backend:run > /tmp/silk_backend.log 2>&1 &
         echo -e "  ${GREEN}后端启动命令已执行${NC}"
         echo -e "  日志: /tmp/silk_backend.log"
@@ -1305,6 +1329,7 @@ quick_restart() {
     
     # 启动后端
     cd "$SILK_DIR"
+    clean_gradle_kotlin_snapshots
     nohup ./gradlew :backend:run > /tmp/silk_backend.log 2>&1 &
     echo "  后端启动中..."
     

@@ -265,7 +265,23 @@ class DirectModelAgent(
             callback("thinking", "🤔 思考中...", false)
             
             // ✅ 从一开始就使用流式API检测 tool_calls 并实时输出
-            val result = callModelStreamingWithToolDetection(callback)
+            val result = try {
+                callModelStreamingWithToolDetection(callback)
+            } catch (e: Exception) {
+                if (e.message?.contains("400") == true) {
+                    logger.warn("⚠️ 流式API返回400，清理历史后重试一次")
+                    sanitizeConversationHistory()
+                    try {
+                        callModelStreamingWithToolDetection(callback)
+                    } catch (retryEx: Exception) {
+                        callback("error", "❌ API调用失败: ${retryEx.message}", true)
+                        return "抱歉，处理您的问题时发生了错误。"
+                    }
+                } else {
+                    callback("error", "❌ API调用失败: ${e.message}", true)
+                    return "抱歉，处理您的问题时发生了错误。"
+                }
+            }
             
             if (result.toolCalls != null && result.toolCalls.isNotEmpty()) {
                 // 模型想要使用工具
@@ -377,7 +393,12 @@ class DirectModelAgent(
         val response = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofInputStream())
 
         if (response.statusCode() != 200) {
-            logger.error("❌ 流式API调用失败: ${response.statusCode()}")
+            val errorBody = try { response.body().bufferedReader().readText().take(500) } catch (_: Exception) { "" }
+            logger.error("❌ 流式API调用失败: ${response.statusCode()}, body=$errorBody")
+            if (response.statusCode() == 400 && errorBody.contains("json", ignoreCase = true)) {
+                logger.warn("⚠️ 可能是对话历史中包含无效的 tool_call arguments JSON，尝试清理历史后重试")
+                sanitizeConversationHistory()
+            }
             throw Exception("流式API调用失败: ${response.statusCode()}")
         }
 
@@ -470,21 +491,35 @@ class DirectModelAgent(
             }
         }
         
-        // 构建 tool_calls 结果
+        // 构建 tool_calls 结果（验证并修复 arguments JSON）
         val finalToolCalls = if (hasToolCalls && toolCallsMap.isNotEmpty()) {
-            toolCallsMap.map { (id, args) ->
+            toolCallsMap.mapNotNull { (id, args) ->
                 val info = toolCallsInfo[id] ?: Pair("function", "")
-                ToolCall(
-                    id = id,
-                    type = info.first,
-                    function = ToolFunction(
-                        name = info.second,
-                        arguments = args.toString()
+                val rawArgs = args.toString().trim()
+
+                val validArgs = try {
+                    json.parseToJsonElement(rawArgs).toString()
+                } catch (e: Exception) {
+                    logger.warn("⚠️ [流式API] tool_call arguments JSON 无效 (id=$id), 尝试修复: ${e.message}")
+                    repairJsonArguments(rawArgs)
+                }
+
+                if (validArgs != null) {
+                    ToolCall(
+                        id = id,
+                        type = info.first,
+                        function = ToolFunction(
+                            name = info.second,
+                            arguments = validArgs
+                        )
                     )
-                )
+                } else {
+                    logger.error("❌ [流式API] 无法修复 tool_call arguments, 跳过 (id=$id, name=${info.second})")
+                    null
+                }
             }.also {
                 logger.info("🔧 [流式API] 检测到 tool_calls: ${it.map { tc -> tc.function.name }}")
-            }
+            }.ifEmpty { null }
         } else null
         
         logger.info("✅ [流式API] 完成: ${fullText.length} 字符, tool_calls=${finalToolCalls != null}")
@@ -623,6 +658,76 @@ class DirectModelAgent(
         return fullText.toString()
     }
     
+    /**
+     * 清理对话历史中无效的 tool_call arguments，
+     * 防止后续请求继续触发 vLLM 400 错误。
+     */
+    private fun sanitizeConversationHistory() {
+        for (i in conversationHistory.indices) {
+            val msg = conversationHistory[i]
+            if (msg.tool_calls != null) {
+                val sanitized = msg.tool_calls.map { tc ->
+                    val raw = tc.function.arguments
+                    val valid = try {
+                        json.parseToJsonElement(raw); raw
+                    } catch (_: Exception) {
+                        repairJsonArguments(raw) ?: "{}"
+                    }
+                    tc.copy(function = tc.function.copy(arguments = valid))
+                }
+                conversationHistory[i] = msg.copy(tool_calls = sanitized)
+            }
+        }
+        logger.info("✅ 对话历史已清理 (共 ${conversationHistory.size} 条消息)")
+    }
+
+    /**
+     * 尝试修复模型生成的不合法 JSON arguments。
+     * 常见问题：缺少逗号、未闭合的引号/花括号、尾部截断等。
+     * 返回修复后的合法 JSON 字符串，或 null 表示无法修复。
+     */
+    private fun repairJsonArguments(raw: String): String? {
+        if (raw.isBlank()) return "{}"
+        var s = raw.trim()
+
+        // 1. 确保以 { 开头
+        if (!s.startsWith("{")) s = "{$s"
+
+        // 2. 移除尾部不完整的 key（例如 ..."someKey 截断）
+        s = s.replace(Regex(",\\s*\"[^\"]*$"), "")
+
+        // 3. 尝试补齐未闭合的字符串值
+        val unclosedString = Regex(":\\s*\"([^\"]*)$")
+        if (unclosedString.containsMatchIn(s)) {
+            s = "$s\""
+        }
+
+        // 4. 确保以 } 结尾
+        if (!s.endsWith("}")) s = "$s}"
+
+        // 5. 修复缺少逗号的情况: }"key" -> },"key"  或  "value""key" -> "value","key"
+        s = s.replace(Regex("\"\\s*\"(?=[a-zA-Z_])")) { match ->
+            "\",\""
+        }
+
+        return try {
+            json.parseToJsonElement(s).toString()
+        } catch (e: Exception) {
+            logger.warn("⚠️ repairJsonArguments 仍然无法解析: ${e.message}, raw=$raw")
+            // 最终降级：提取看起来合法的 key:value 对
+            try {
+                val pairs = Regex("\"(\\w+)\"\\s*:\\s*(\"[^\"]*\"|\\d+|true|false|null)")
+                    .findAll(raw)
+                    .map { "\"${it.groupValues[1]}\": ${it.groupValues[2]}" }
+                    .joinToString(", ")
+                val fallback = "{$pairs}"
+                json.parseToJsonElement(fallback).toString()
+            } catch (_: Exception) {
+                null
+            }
+        }
+    }
+
     /**
      * 获取可用的工具列表
      * 这里定义模型可以使用的工具

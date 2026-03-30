@@ -11,7 +11,15 @@ import requests
 from datetime import datetime
 from pathlib import Path
 
-WEAVIATE_URL = "http://localhost:8008"
+WEAVIATE_URL = os.environ.get("WEAVIATE_URL", "http://localhost:8008")
+
+
+def _wv_headers():
+    h = {"Content-Type": "application/json"}
+    key = os.environ.get("WEAVIATE_API_KEY", "").strip()
+    if key:
+        h["Authorization"] = f"Bearer {key}"
+    return h
 CHAT_HISTORY_DIR = "/Users/mac/Documents/Silk/backend/chat_history"
 
 def get_file_content(file_path: str) -> str:
@@ -63,7 +71,7 @@ def delete_old_file_records():
     
     try:
         response = requests.post(f"{WEAVIATE_URL}/v1/graphql",
-                                json={"query": query})
+                                json={"query": query}, headers=_wv_headers())
         data = response.json()
         
         objects = data.get("data", {}).get("Get", {}).get("SilkContext", [])
@@ -71,7 +79,7 @@ def delete_old_file_records():
         for obj in objects:
             obj_id = obj.get("_additional", {}).get("id")
             if obj_id:
-                requests.delete(f"{WEAVIATE_URL}/v1/objects/SilkContext/{obj_id}")
+                requests.delete(f"{WEAVIATE_URL}/v1/objects/SilkContext/{obj_id}", headers=_wv_headers())
                 print(f"   🗑️ 删除旧记录: {obj_id[:8]}...")
         
         print(f"✅ 删除了 {len(objects)} 条旧记录")
@@ -108,7 +116,7 @@ def index_file(file_path: str, session_id: str, user_id: str = "reindex-user"):
     try:
         response = requests.post(f"{WEAVIATE_URL}/v1/objects",
                                 json=obj,
-                                headers={"Content-Type": "application/json"})
+                                headers=_wv_headers())
         if response.status_code in [200, 201]:
             print(f"   ✅ 索引成功: {filename} -> {normalized_session_id}")
             return True
@@ -125,7 +133,7 @@ def main():
     
     # 检查 Weaviate
     try:
-        response = requests.get(f"{WEAVIATE_URL}/v1/.well-known/ready", timeout=5)
+        response = requests.get(f"{WEAVIATE_URL}/v1/.well-known/ready", timeout=5, headers=_wv_headers())
         if not response.ok:
             print("❌ Weaviate 未就绪")
             return

@@ -28,6 +28,7 @@ import threading
 import weaviate
 from weaviate.classes.query import Filter
 from weaviate.util import generate_uuid5
+from weaviate_connect import connect_weaviate
 import requests
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler, FileCreatedEvent, FileModifiedEvent
@@ -174,11 +175,8 @@ class SilkIndexer:
     """Silk 上下文索引器 - 支持多用户隔离"""
     
     def __init__(self, weaviate_url: str = WEAVIATE_URL):
-        self.client = weaviate.connect_to_local(
-            host="localhost",
-            port=8085,
-            grpc_port=50051
-        )
+        _ = weaviate_url  # 连接参数来自 WEAVIATE_URL / WEAVIATE_API_KEY 环境变量
+        self.client = connect_weaviate()
         self.parser = DocumentParser()
         self.chunker = TextChunker()
         self.indexed_files: Dict[str, str] = {}  # file_path -> hash
