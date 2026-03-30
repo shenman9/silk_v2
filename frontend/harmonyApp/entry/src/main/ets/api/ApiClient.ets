@@ -208,6 +208,13 @@ interface UserTodoExtractionDiagnosticsEnvelope {
   note?: string;
 }
 
+interface CalendarWorkdayEnvelope {
+  success: boolean;
+  message: string;
+  date?: string;
+  isWorkday?: boolean;
+}
+
 /** 待办 PATCH（传给 updateUserTodoItem，仅设置需要修改的字段） */
 export interface UserTodoPatch {
   done?: boolean;
@@ -803,6 +810,51 @@ export class ApiClient {
       return this.failedResponse<UserTodoItem[]>('加载待办失败');
     } catch (error) {
       return this.failedResponse<UserTodoItem[]>(`Request failed: ${this.stringifyError(error)}`);
+    } finally {
+      httpRequest.destroy();
+    }
+  }
+
+  /**
+   * 查询指定日期是否为中国法定工作日（含调休）。
+   * date 格式：yyyy-MM-dd
+   */
+  async isCalendarWorkday(date: string): Promise<ApiResponse<boolean>> {
+    const day = date.trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) {
+      return this.failedResponse<boolean>('日期格式错误，应为 yyyy-MM-dd');
+    }
+    const httpRequest = this.createHttpRequest();
+    try {
+      const encoded = encodeURIComponent(day);
+      const response = await this.requestWithFallback(
+        httpRequest,
+        `/api/calendar/workday/${encoded}`,
+        {
+          method: http.RequestMethod.GET,
+          header: {
+            'Content-Type': 'application/json'
+          },
+          connectTimeout: this.timeout,
+          readTimeout: this.timeout
+        }
+      );
+      if (response.responseCode === 200) {
+        const raw = response.result as Object;
+        const parsed: CalendarWorkdayEnvelope = (typeof raw === 'string'
+          ? JSON.parse(raw as string)
+          : JSON.parse(JSON.stringify(raw))) as CalendarWorkdayEnvelope;
+        if (parsed.success && parsed.isWorkday !== undefined) {
+          return {
+            success: true,
+            message: parsed.message ? parsed.message : 'ok',
+            data: parsed.isWorkday === true
+          };
+        }
+      }
+      return this.failedResponse<boolean>('查询工作日失败');
+    } catch (error) {
+      return this.failedResponse<boolean>(`Request failed: ${this.stringifyError(error as Object)}`);
     } finally {
       httpRequest.destroy();
     }

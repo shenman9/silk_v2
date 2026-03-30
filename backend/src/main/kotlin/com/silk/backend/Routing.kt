@@ -17,6 +17,7 @@ import org.jetbrains.exposed.sql.*
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
 import org.jetbrains.exposed.sql.transactions.transaction
 import java.io.File
+import java.time.LocalDate
 import java.util.*
 import java.util.concurrent.ConcurrentHashMap
 
@@ -945,6 +946,41 @@ fun Application.configureRouting() {
                 call.respond(SimpleResponse(true, "已标记为已读"))
             } catch (e: Exception) {
                 call.respond(HttpStatusCode.BadRequest, SimpleResponse(false, "请求格式错误"))
+            }
+        }
+
+        // ==================== 日历/工作日 API ====================
+        get("/api/calendar/workday/{date}") {
+            val dateRaw = call.parameters["date"] ?: ""
+            if (dateRaw.isBlank()) {
+                call.respond(
+                    HttpStatusCode.BadRequest,
+                    mapOf(
+                        "success" to false,
+                        "message" to "date 不能为空，格式应为 yyyy-MM-dd"
+                    )
+                )
+                return@get
+            }
+            try {
+                val date = LocalDate.parse(dateRaw)
+                val isWorkday = com.silk.backend.todos.HolidayCalendarCn.isWorkday(date)
+                call.respond(
+                    mapOf(
+                        "success" to true,
+                        "message" to "ok",
+                        "date" to dateRaw,
+                        "isWorkday" to isWorkday
+                    )
+                )
+            } catch (e: Exception) {
+                call.respond(
+                    HttpStatusCode.BadRequest,
+                    mapOf(
+                        "success" to false,
+                        "message" to "date 格式错误，应为 yyyy-MM-dd"
+                    )
+                )
             }
         }
 

@@ -353,8 +353,40 @@ export struct TodoPage {
     return false;
   }
 
+  private isWorkdayTemplate(item: UserTodoItem): boolean {
+    const rr = (item.repeatRule ? item.repeatRule : '').toLowerCase();
+    if (rr === 'workday') {
+      return true;
+    }
+    const title = item.title ? item.title : '';
+    return (/工作日|上班日|每个工作日/).test(title);
+  }
+
+  private formatDateYYYYMMDD(d: Date): string {
+    const y = d.getFullYear();
+    const m = `${d.getMonth() + 1}`.padStart(2, '0');
+    const day = `${d.getDate()}`.padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  }
+
+  private async isTodayLegalWorkday(): Promise<boolean> {
+    const dateText = this.formatDateYYYYMMDD(new Date());
+    console.info(`[TodoPage] isTodayLegalWorkday: checking ${dateText}`);
+    const res = await this.apiClient.isCalendarWorkday(dateText);
+    console.info(`[TodoPage] isTodayLegalWorkday: API response success=${res.success}, data=${res.data}, msg=${res.message}`);
+    if (res.success && res.data !== undefined) {
+      if (!res.data) {
+        this.showToast(`${dateText} 是法定休息日，工作日模板不会创建闹钟`);
+      }
+      return res.data === true;
+    }
+    this.showToast(`工作日校验失败（${res.message ? res.message : '未知原因'}），已按周规则兜底`);
+    const day = new Date().getDay();
+    return day >= 1 && day <= 5;
+  }
+
   private todoCanExecute(item: UserTodoItem): boolean {
-    if (this.isLongTermTemplate(item) || item.done) {
+    if (item.done) {
       return false;
     }
     const at = (item.actionType ? item.actionType : 'none').toLowerCase();
@@ -387,13 +419,21 @@ export struct TodoPage {
     return this.executingTodoIds[item.id] === true;
   }
 
+  private todoCanUndoExecute(item: UserTodoItem): boolean {
+    return item.executedAt !== undefined &&
+      item.executedAt > 0 &&
+      item.reminderId !== undefined &&
+      item.reminderId > 0;
+  }
+
   private async runTodoMainAction(item: UserTodoItem): Promise<void> {
     if (this.isTodoExecuting(item)) {
       this.showToast('正在执行中，请稍候');
       return;
     }
     if (item.done) {
-      this.showToast('该项已完成。请先取消左侧勾选，再点「重设」调整提醒。');
+      this.showToast(this.isLongTermTemplate(item) ? '该模板已暂停。请先启用模板后再执行。' :
+        '该项已完成。请先取消左侧勾选，再点「重设」调整提醒。');
       return;
     }
     let at = (item.actionType ? item.actionType : 'none').toLowerCase();
@@ -406,6 +446,8 @@ export struct TodoPage {
       this.showToast('无法解析时间，标题或详情需含如 7点、07:00');
       return;
     }
+    const isLongTerm = this.isLongTermTemplate(item);
+    const isWorkday = this.isWorkdayTemplate(item);
     const isRerun = item.executedAt !== undefined && item.executedAt > 0;
     await this.withTodoRowLocked(item.id, async (): Promise<void> => {
       if (isRerun && item.reminderId !== undefined && item.reminderId > 0) {
@@ -413,13 +455,14 @@ export struct TodoPage {
         await AlarmService.removeCalendarEvent(item.reminderId);
       }
       let res: AlarmResult;
-      if (at === 'alarm') {
-        res = await AlarmService.setAlarmForTodo(parsed.hour, parsed.minute, item.title);
-      } else if (at === 'calendar') {
+      if (at === 'calendar') {
         res = await AlarmService.setCalendarOnlyForTodo(parsed.hour, parsed.minute, item.title);
+      } else if (isLongTerm && isWorkday) {
+        res = await AlarmService.setRecurringAlarmForTodo(
+          parsed.hour, parsed.minute, item.title, [1, 2, 3, 4, 5]
+        );
       } else {
-        this.showToast('不支持的类型');
-        return;
+        res = await AlarmService.setAlarmForTodo(parsed.hour, parsed.minute, item.title);
       }
       if (!res.success) {
         this.showToast(`执行失败: ${res.message}`);
@@ -428,7 +471,13 @@ export struct TodoPage {
       this.showToast(isRerun ? '已重新设定' : res.message);
       const now = Date.now();
       const firstExec = item.executedAt !== undefined && item.executedAt > 0 ? item.executedAt : now;
-      const runPatch: UserTodoPatch = {
+      const runPatch: UserTodoPatch = isLongTerm ? {
+        done: false,
+        executedAt: firstExec,
+        reminderId: res.reminderId,
+        lifecycleState: 'active',
+        closedAt: 0
+      } : {
         done: true,
         executedAt: firstExec,
         reminderId: res.reminderId,
@@ -475,16 +524,84 @@ export struct TodoPage {
     for (let i = 0; i < this.todoItems.length; i++) {
       const it = this.todoItems[i];
       if (it.id === item.id) {
+        const isLongTerm = this.isLongTermTemplate(it);
         const merged: UserTodoItem = {
           id: it.id,
           title: it.title,
           createdAt: it.createdAt,
           updatedAt: Date.now(),
-          done: true,
+          done: isLongTerm ? false : true,
           executedAt: executedAt,
           reminderId: reminderId,
-          lifecycleState: 'done',
-          closedAt: Date.now()
+          lifecycleState: isLongTerm ? 'active' : 'done',
+          closedAt: isLongTerm ? 0 : Date.now()
+        };
+        if (it.sourceGroupId !== undefined) {
+          merged.sourceGroupId = it.sourceGroupId;
+        }
+        if (it.sourceGroupName !== undefined) {
+          merged.sourceGroupName = it.sourceGroupName;
+        }
+        if (it.actionType !== undefined) {
+          merged.actionType = it.actionType;
+        }
+        if (it.actionDetail !== undefined) {
+          merged.actionDetail = it.actionDetail;
+        }
+        next.push(merged);
+      } else {
+        next.push(it);
+      }
+    }
+    this.setTodoItemsData(next);
+  }
+
+  private async runUndoTodoExecution(item: UserTodoItem): Promise<void> {
+    if (!this.todoCanUndoExecute(item)) {
+      this.showToast('当前项没有可撤回的执行记录');
+      return;
+    }
+    await this.withTodoRowLocked(item.id, async (): Promise<void> => {
+      const rid = item.reminderId ? item.reminderId : 0;
+      if (rid > 0) {
+        await AlarmService.cancelReminder(rid);
+        await AlarmService.removeCalendarEvent(rid);
+      }
+      if (item.title && item.title.length > 0) {
+        await AlarmService.removeCalendarEventsByTitle(item.title);
+      }
+      const undoPatch: UserTodoPatch = {
+        done: false,
+        executedAt: 0,
+        clearReminderId: true,
+        lifecycleState: 'active',
+        closedAt: 0
+      };
+      const res = await this.apiClient.updateUserTodoItem(this.userId, item.id, undoPatch);
+      if (res.success && res.data) {
+        this.setTodoItemsData(res.data);
+        this.showToast('已撤回执行');
+      } else {
+        this.applyTodoUndoSuccessLocal(item);
+        this.showToast(res.message ? res.message : '已撤回系统提醒，本地状态已回滚');
+      }
+    });
+  }
+
+  private applyTodoUndoSuccessLocal(item: UserTodoItem): void {
+    const next: UserTodoItem[] = [];
+    for (let i = 0; i < this.todoItems.length; i++) {
+      const it = this.todoItems[i];
+      if (it.id === item.id) {
+        const merged: UserTodoItem = {
+          id: it.id,
+          title: it.title,
+          createdAt: it.createdAt,
+          updatedAt: Date.now(),
+          done: false,
+          executedAt: 0,
+          lifecycleState: 'active',
+          closedAt: 0
         };
         if (it.sourceGroupId !== undefined) {
           merged.sourceGroupId = it.sourceGroupId;
@@ -701,12 +818,17 @@ export struct TodoPage {
                       executing: this.isTodoExecuting(item),
                       isLongTerm: this.isLongTermTemplate(item),
                       canExecute: this.todoCanExecute(item),
+                      canUndoExecute: this.todoCanUndoExecute(item),
+                      undoing: this.isTodoExecuting(item),
                       needsTimeHint: this.todoNeedsTimeHint(item),
                       onToggle: (): void => {
                         this.toggleTodoItem(item);
                       },
                       onRun: (): void => {
                         void this.runTodoMainAction(item);
+                      },
+                      onUndo: (): void => {
+                        void this.runUndoTodoExecution(item);
                       },
                       onMenu: (): void => {
                         this.showTodoActionMenu(item);
@@ -757,12 +879,17 @@ export struct TodoPage {
                       executing: this.isTodoExecuting(item),
                       isLongTerm: this.isLongTermTemplate(item),
                       canExecute: this.todoCanExecute(item),
+                      canUndoExecute: this.todoCanUndoExecute(item),
+                      undoing: this.isTodoExecuting(item),
                       needsTimeHint: this.todoNeedsTimeHint(item),
                       onToggle: (): void => {
                         this.toggleTodoItem(item);
                       },
                       onRun: (): void => {
                         void this.runTodoMainAction(item);
+                      },
+                      onUndo: (): void => {
+                        void this.runUndoTodoExecution(item);
                       },
                       onMenu: (): void => {
                         this.showTodoActionMenu(item);

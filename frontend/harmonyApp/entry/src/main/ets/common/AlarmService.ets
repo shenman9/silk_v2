@@ -22,18 +22,32 @@ export type SystemReminderPresence = 'exists' | 'missing' | 'unknown';
 
 export class AlarmService {
   /**
-   * 设定闹钟 — 自动选择可用方案（兼容旧调用，不清理已有系统闹钟）
+   * 设定闹钟 — 一次性（兼容旧调用）
    */
   static async setAlarm(hour: number, minute: number): Promise<AlarmResult> {
-    return AlarmService.setAlarmWithTitle(hour, minute, 'Silk 闹钟');
+    return AlarmService.setAlarmWithTitle(hour, minute, 'Silk 闹钟', []);
   }
 
   /**
-   * 待办「执行」：使用用户可见标题发布闹钟/日历提醒
+   * 待办「执行」：一次性闹钟（短期实例 / 普通长期模板单次执行）
    */
   static async setAlarmForTodo(hour: number, minute: number, title: string): Promise<AlarmResult> {
     const t = title.trim().length > 0 ? title.trim() : 'Silk 待办提醒';
-    return AlarmService.setAlarmWithTitle(hour, minute, t);
+    return AlarmService.setAlarmWithTitle(hour, minute, t, []);
+  }
+
+  /**
+   * 待办「执行」：工作日重复闹钟（长期工作日模板）
+   * daysOfWeek: [1,2,3,4,5] = 周一到周五
+   */
+  static async setRecurringAlarmForTodo(
+    hour: number,
+    minute: number,
+    title: string,
+    daysOfWeek: number[]
+  ): Promise<AlarmResult> {
+    const t = title.trim().length > 0 ? title.trim() : 'Silk 待办提醒';
+    return AlarmService.setAlarmWithTitle(hour, minute, t, daysOfWeek);
   }
 
   /** 仅写入日历提醒（待办 actionType=calendar） */
@@ -42,19 +56,30 @@ export class AlarmService {
     return AlarmService.tryCalendarEvent(hour, minute, t);
   }
 
-  private static async setAlarmWithTitle(hour: number, minute: number, title: string): Promise<AlarmResult> {
+  /**
+   * @param repeatDays 空数组 = 一次性；非空 = 按指定星期几重复
+   */
+  private static async setAlarmWithTitle(
+    hour: number,
+    minute: number,
+    title: string,
+    repeatDays: number[]
+  ): Promise<AlarmResult> {
     const minuteStr = minute < 10 ? `0${minute}` : `${minute}`;
-    Logger.info(TAG, `===== 设定闹钟 ${hour}:${minuteStr} ${title} =====`);
+    const modeLabel = repeatDays.length > 0
+      ? `重复(${repeatDays.join(',')})`
+      : '一次性';
+    Logger.info(TAG, `===== 设定闹钟 ${hour}:${minuteStr} [${modeLabel}] ${title} =====`);
 
     Logger.info(TAG, '尝试方案1: reminderAgentManager...');
-    const result1 = await AlarmService.tryReminderAgent(hour, minute, title);
+    const result1 = await AlarmService.tryReminderAgent(hour, minute, title, repeatDays);
     if (result1.success) {
       return result1;
     }
     Logger.info(TAG, `方案1 失败: ${result1.message}`);
 
-    Logger.info(TAG, '尝试方案2: calendarManager...');
-    const result2 = await AlarmService.tryCalendarEvent(hour, minute, title);
+    Logger.info(TAG, `尝试方案2: calendarManager... (repeatDays=[${repeatDays.join(',')}])`);
+    const result2 = await AlarmService.tryCalendarEvent(hour, minute, title, repeatDays);
     if (result2.success) {
       return result2;
     }
@@ -68,9 +93,16 @@ export class AlarmService {
   }
 
   /**
-   * 方案1: reminderAgentManager（代理提醒 / 原子化闹钟能力）
+   * 方案1: reminderAgentManager
+   * repeatDays 为空时使用 REMINDER_TYPE_TIMER（一次性倒计时），
+   * 非空时使用 REMINDER_TYPE_ALARM + daysOfWeek（按星期重复）。
    */
-  private static async tryReminderAgent(hour: number, minute: number, title: string): Promise<AlarmResult> {
+  private static async tryReminderAgent(
+    hour: number,
+    minute: number,
+    title: string,
+    repeatDays: number[]
+  ): Promise<AlarmResult> {
     try {
       const grant = await AlarmService.requestPermissions(
         ['ohos.permission.PUBLISH_AGENT_REMINDER' as Permissions]
@@ -79,27 +111,62 @@ export class AlarmService {
         return { success: false, reminderId: -1, message: '代理提醒权限被拒绝' };
       }
       const alarmTitle = title.length > 60 ? title.substring(0, 57) + '…' : title;
-      const alarm: reminderAgentManager.ReminderRequestAlarm = {
-        reminderType: reminderAgentManager.ReminderType.REMINDER_TYPE_ALARM,
-        hour: hour,
-        minute: minute,
-        daysOfWeek: [],
+      const minuteStr = minute < 10 ? `0${minute}` : `${minute}`;
+
+      if (repeatDays.length > 0) {
+        const daysText = `周${AlarmService.daysLabel(repeatDays)}`;
+        const alarm: reminderAgentManager.ReminderRequestAlarm = {
+          reminderType: reminderAgentManager.ReminderType.REMINDER_TYPE_ALARM,
+          hour: hour,
+          minute: minute,
+          daysOfWeek: repeatDays,
+          title: alarmTitle,
+          content: `每个工作日重复 · ${daysText}`
+        };
+        const id = await reminderAgentManager.publishReminder(alarm);
+        Logger.info(TAG, `reminderAgent 重复闹钟成功, id=${id}, days=[${repeatDays.join(',')}], daysText=${daysText}`);
+        return { success: true, reminderId: id, message: `已设定重复闹钟 ${hour}:${minuteStr}（${daysText}，共${repeatDays.length}天）` };
+      }
+
+      const now = new Date();
+      const target = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hour, minute, 0);
+      if (target.getTime() <= now.getTime()) {
+        target.setDate(target.getDate() + 1);
+      }
+      const seconds = Math.max(Math.floor((target.getTime() - now.getTime()) / 1000), 1);
+      const timer: reminderAgentManager.ReminderRequestTimer = {
+        reminderType: reminderAgentManager.ReminderType.REMINDER_TYPE_TIMER,
+        triggerTimeInSeconds: seconds,
         title: alarmTitle
       };
-      const id = await reminderAgentManager.publishReminder(alarm);
-      const minuteStr = minute < 10 ? `0${minute}` : `${minute}`;
-      Logger.info(TAG, `reminderAgent 成功, id=${id}`);
-      return { success: true, reminderId: id, message: `已请求系统闹钟 ${hour}:${minuteStr}` };
+      const id = await reminderAgentManager.publishReminder(timer);
+      Logger.info(TAG, `reminderAgent 一次性提醒成功, id=${id}, ${seconds}s后`);
+      return { success: true, reminderId: id, message: `已设定一次性闹钟 ${hour}:${minuteStr}` };
     } catch (e) {
       const err = e as Record<string, Object>;
       return { success: false, reminderId: -1, message: `${err.code} ${err.message}` };
     }
   }
 
+  private static daysLabel(days: number[]): string {
+    const names: string[] = ['一', '二', '三', '四', '五', '六', '日'];
+    const labels: string[] = [];
+    for (let i = 0; i < days.length; i++) {
+      const d = days[i];
+      if (d >= 1 && d <= 7) {
+        labels.push(names[d - 1]);
+      }
+    }
+    return labels.join('、');
+  }
+
   /**
    * 方案2: calendarManager 创建日历事件 + 提醒
+   * repeatDays 非空时为每个指定星期几各创建一个 WEEKLY 循环事件，覆盖全部工作日。
    */
-  private static async tryCalendarEvent(hour: number, minute: number, title: string): Promise<AlarmResult> {
+  private static async tryCalendarEvent(
+    hour: number, minute: number, title: string, repeatDays: number[] = []
+  ): Promise<AlarmResult> {
     const context = getGlobalContext();
     if (!context) {
       return { success: false, reminderId: -1, message: 'context 为空' };
@@ -107,7 +174,6 @@ export class AlarmService {
 
     const minuteStr = minute < 10 ? `0${minute}` : `${minute}`;
 
-    // 申请日历权限
     Logger.info(TAG, '申请日历读写权限...');
     const granted = await AlarmService.requestPermissions(
       ['ohos.permission.READ_CALENDAR' as Permissions, 'ohos.permission.WRITE_CALENDAR' as Permissions]
@@ -118,11 +184,9 @@ export class AlarmService {
     Logger.info(TAG, '日历权限已获取');
 
     try {
-      // 获取 CalendarManager
       const mgr = calendarManager.getCalendarManager(context);
       Logger.info(TAG, 'CalendarManager 获取成功');
 
-      // 获取默认日历
       let calendar: calendarManager.Calendar;
       try {
         calendar = await mgr.getCalendar();
@@ -138,13 +202,47 @@ export class AlarmService {
         Logger.info(TAG, '新日历创建成功');
       }
 
-      // 构造事件时间
+      const eventTitle = title.length > 80 ? title.substring(0, 77) + '…' : title;
+
+      if (repeatDays.length > 0) {
+        const eventIds: number[] = [];
+        for (let d = 0; d < repeatDays.length; d++) {
+          const dayOfWeek = repeatDays[d];
+          const startTime = AlarmService.nextWeekdayOccurrence(dayOfWeek, hour, minute);
+          const endTime = startTime + 30 * 60 * 1000;
+          const dayLabel = AlarmService.daysLabel([dayOfWeek]);
+          const evt: calendarManager.Event = {
+            type: calendarManager.EventType.IMPORTANT,
+            title: eventTitle,
+            startTime: startTime,
+            endTime: endTime,
+            reminderTime: [0],
+            recurrenceRule: { recurrenceFrequency: calendarManager.RecurrenceFrequency.WEEKLY },
+            description: `Silk 工作日待办 · 周${dayLabel} ${hour}:${minuteStr}`
+          };
+          try {
+            const eid = await calendar.addEvent(evt);
+            eventIds.push(eid);
+            Logger.info(TAG, `日历事件创建成功: 周${dayLabel}, eventId=${eid}, start=${startTime}`);
+          } catch (evtErr) {
+            const eObj = evtErr as Record<string, Object>;
+            Logger.error(TAG, `创建周${dayLabel}日历事件失败: ${eObj.code} ${eObj.message}`);
+          }
+        }
+        if (eventIds.length > 0) {
+          const daysText = `周${AlarmService.daysLabel(repeatDays)}`;
+          return {
+            success: true,
+            reminderId: eventIds[0],
+            message: `闹钟已设定: ${hour}:${minuteStr} (日历重复提醒，${daysText}，共${eventIds.length}个事件)`
+          };
+        }
+        return { success: false, reminderId: -1, message: '所有工作日日历事件均创建失败' };
+      }
+
       const now = new Date();
       const startTime = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hour, minute, 0).getTime();
-      const endTime = startTime + 30 * 60 * 1000; // 持续30分钟
-
-      // 创建事件，reminderTime: [0] 表示事件开始时提醒
-      const eventTitle = title.length > 80 ? title.substring(0, 77) + '…' : title;
+      const endTime = startTime + 30 * 60 * 1000;
       const event: calendarManager.Event = {
         type: calendarManager.EventType.IMPORTANT,
         title: eventTitle,
@@ -169,6 +267,27 @@ export class AlarmService {
       Logger.error(TAG, `日历事件创建失败: ${errMsg}`);
       return { success: false, reminderId: -1, message: errMsg };
     }
+  }
+
+  /**
+   * 计算指定星期几的下一次出现时间戳。
+   * dayOfWeek: 1=周一, ..., 7=周日 (与 reminderAgent 一致)
+   */
+  private static nextWeekdayOccurrence(dayOfWeek: number, hour: number, minute: number): number {
+    const now = new Date();
+    const jsDayTarget = dayOfWeek === 7 ? 0 : dayOfWeek;
+    const jsDayNow = now.getDay();
+    let daysAhead = jsDayTarget - jsDayNow;
+    if (daysAhead < 0) {
+      daysAhead += 7;
+    }
+    const target = new Date(
+      now.getFullYear(), now.getMonth(), now.getDate() + daysAhead, hour, minute, 0
+    );
+    if (daysAhead === 0 && target.getTime() <= now.getTime()) {
+      target.setDate(target.getDate() + 7);
+    }
+    return target.getTime();
   }
 
   /**
@@ -208,6 +327,46 @@ export class AlarmService {
       const err = e as Record<string, Object>;
       Logger.error(TAG, `取消提醒失败: ${err.code} ${err.message}`);
       return false;
+    }
+  }
+
+  /**
+   * 按标题前缀删除所有匹配的日历事件（用于撤回工作日多事件闹钟）。
+   */
+  static async removeCalendarEventsByTitle(titlePrefix: string): Promise<number> {
+    const context = getGlobalContext();
+    if (!context) {
+      return 0;
+    }
+    try {
+      const granted = await AlarmService.requestPermissions(
+        ['ohos.permission.READ_CALENDAR' as Permissions, 'ohos.permission.WRITE_CALENDAR' as Permissions]
+      );
+      if (!granted) {
+        return 0;
+      }
+      const mgr = calendarManager.getCalendarManager(context);
+      const cal = await mgr.getCalendar();
+      const events = await cal.getEvents();
+      let removed = 0;
+      const prefix = titlePrefix.length > 77 ? titlePrefix.substring(0, 77) : titlePrefix;
+      for (let i = 0; i < events.length; i++) {
+        const evt = events[i];
+        if (evt.title && evt.title.startsWith(prefix) && evt.id !== undefined) {
+          try {
+            await cal.deleteEvent(evt.id);
+            removed++;
+          } catch (delErr) {
+            // individual delete failure is non-fatal
+          }
+        }
+      }
+      Logger.info(TAG, `removeCalendarEventsByTitle: 删除了 ${removed} 个标题匹配的日历事件 (prefix=${prefix.substring(0, 20)}…)`);
+      return removed;
+    } catch (e) {
+      const err = e as Record<string, Object>;
+      Logger.error(TAG, `removeCalendarEventsByTitle 失败: ${err.code} ${err.message}`);
+      return 0;
     }
   }
 

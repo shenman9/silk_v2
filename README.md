@@ -12,6 +12,17 @@ A cross-platform chat application built with Kotlin Multiplatform. It provides a
 - **Vector store**: Weaviate (run via Docker by `silk.sh`). Used for context and file search.
 - **AI**: Any OpenAI-compatible API; configure `API_BASE_URL`, `OPENAI_API_KEY`, and `AI_MODEL` in `.env`.
 
+## Todo Roadmap Governance
+
+Todo is treated as a long-term core module. Any todo-related feature must follow:
+
+1. Update/align roadmap first: `docs/todo-roadmap.md`
+2. Then implement code changes.
+3. Write back status/changelog to roadmap after implementation.
+
+Persistent Cursor rule:
+- `.cursor/rules/todo_planning_governance.mdc`
+
 All day-to-day operations (build, run, stop, logs, Weaviate) are driven by the **`silk.sh`** script in the project root.
 
 ---

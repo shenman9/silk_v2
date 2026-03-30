@@ -16,9 +16,12 @@ export struct TodoTaskCardRow {
   @Prop executing: boolean = false;
   @Prop isLongTerm: boolean = false;
   @Prop canExecute: boolean = false;
+  @Prop canUndoExecute: boolean = false;
+  @Prop undoing: boolean = false;
   @Prop needsTimeHint: boolean = false;
   onToggle: () => void = (): void => {};
   onRun: () => void = (): void => {};
+  onUndo: () => void = (): void => {};
   onMenu: () => void = (): void => {};
 
   build() {
@@ -80,32 +83,53 @@ export struct TodoTaskCardRow {
       .layoutWeight(1)
       .alignItems(HorizontalAlign.Start)
 
-      if (this.canExecute) {
-        if (this.executing) {
-          LoadingProgress()
-            .width(32)
-            .height(32)
-            .color(SilkColors.onPrimary)
-        } else {
-          Button(this.item.executedAt !== undefined && this.item.executedAt > 0 ? '↻ 重设' : '▶ 运行')
+      Column({ space: 6 }) {
+        if (this.canExecute) {
+          if (this.executing) {
+            LoadingProgress()
+              .width(32)
+              .height(32)
+              .color(SilkColors.onPrimary)
+          } else {
+            Button(this.item.executedAt !== undefined && this.item.executedAt > 0 ? '↻ 重设' : '▶ 运行')
+              .height(32)
+              .fontSize(13)
+              .padding({ left: 12, right: 12 })
+              .backgroundColor(this.item.executedAt !== undefined && this.item.executedAt > 0 ? '#1890FF' : SilkColors.primary)
+              .fontColor(SilkColors.onPrimary)
+              .borderRadius(8)
+              .onClick((): void => {
+                this.onRun();
+              })
+          }
+        } else if (this.item.done && this.item.executedAt !== undefined && this.item.executedAt > 0) {
+          Button('已执行')
             .height(32)
             .fontSize(13)
             .padding({ left: 12, right: 12 })
-            .backgroundColor(this.item.executedAt !== undefined && this.item.executedAt > 0 ? '#1890FF' : SilkColors.primary)
-            .fontColor(SilkColors.onPrimary)
+            .backgroundColor('#D9D9D9')
+            .fontColor('#666666')
             .borderRadius(8)
-            .onClick((): void => {
-              this.onRun();
-            })
         }
-      } else if (this.item.done && this.item.executedAt !== undefined && this.item.executedAt > 0) {
-        Button('已执行')
-          .height(32)
-          .fontSize(13)
-          .padding({ left: 12, right: 12 })
-          .backgroundColor('#D9D9D9')
-          .fontColor('#666666')
-          .borderRadius(8)
+        if (this.canUndoExecute) {
+          if (this.undoing) {
+            LoadingProgress()
+              .width(24)
+              .height(24)
+              .color(SilkColors.primary)
+          } else {
+            Button('撤回执行')
+              .height(28)
+              .fontSize(12)
+              .padding({ left: 10, right: 10 })
+              .backgroundColor('#FFF2E8')
+              .fontColor('#D46B08')
+              .borderRadius(8)
+              .onClick((): void => {
+                this.onUndo();
+              })
+          }
+        }
       }
 
       Text('⋯')
