@@ -1,12 +1,14 @@
 package com.silk.backend.database
 
 import java.util.concurrent.ConcurrentHashMap
+import org.slf4j.LoggerFactory
 
 /**
  * 未读消息追踪仓库
  * 追踪每个用户在每个群组的最后阅读时间和最新消息时间
  */
 object UnreadRepository {
+    private val logger = LoggerFactory.getLogger(UnreadRepository::class.java)
     // 用户最后阅读时间: key = "${userId}_${groupId}", value = timestamp
     private val lastReadTimestamps = ConcurrentHashMap<String, Long>()
     
@@ -22,7 +24,7 @@ object UnreadRepository {
     fun markAsRead(userId: String, groupId: String) {
         val key = "${userId}_${groupId}"
         lastReadTimestamps[key] = System.currentTimeMillis()
-        println("📖 [UnreadRepo] 用户 $userId 已读群组 $groupId")
+        logger.debug("📖 [UnreadRepo] 用户 {} 已读群组 {}", userId, groupId)
     }
     
     /**
@@ -42,13 +44,13 @@ object UnreadRepository {
                 timestamps.removeAt(0)
             }
         }
-        println("📨 [UnreadRepo] 群组 $groupId 收到新消息 @ $timestamp")
+        logger.debug("📨 [UnreadRepo] 群组 {} 收到新消息 @ {}", groupId, timestamp)
         
         // 自动将发送者标记为已读（自己发的消息不应该显示为未读）
         if (senderId != null) {
             val key = "${senderId}_${groupId}"
             lastReadTimestamps[key] = timestamp
-            println("📖 [UnreadRepo] 自动标记发送者 $senderId 已读群组 $groupId")
+            logger.debug("📖 [UnreadRepo] 自动标记发送者 {} 已读群组 {}", senderId, groupId)
         }
     }
     
@@ -94,7 +96,7 @@ object UnreadRepository {
         lastReadTimestamps.keys.filter { it.endsWith("_$groupId") }.forEach {
             lastReadTimestamps.remove(it)
         }
-        println("🗑️ [UnreadRepo] 已清理群组 $groupId 的追踪数据")
+        logger.debug("🗑️ [UnreadRepo] 已清理群组 {} 的追踪数据", groupId)
     }
 }
 

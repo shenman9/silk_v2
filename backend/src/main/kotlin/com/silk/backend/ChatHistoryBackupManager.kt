@@ -8,6 +8,7 @@ import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
+import org.slf4j.LoggerFactory
 
 /**
  * 聊天历史备份管理器
@@ -25,13 +26,15 @@ object ChatHistoryBackupManager {
         prettyPrint = true
         ignoreUnknownKeys = true
     }
-    
+
+    private val logger = LoggerFactory.getLogger(ChatHistoryBackupManager::class.java)
+
     private val backupBaseDir = File("chat_history_backup")
     private val dateFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss")
     
     init {
         backupBaseDir.mkdirs()
-        println("📁 备份目录已创建: ${backupBaseDir.absolutePath}")
+        logger.info("📁 备份目录已创建: {}", backupBaseDir.absolutePath)
     }
     
     /**
@@ -55,7 +58,7 @@ object ChatHistoryBackupManager {
             val sourceDir = File("chat_history/group_$groupId")
             
             if (!sourceDir.exists()) {
-                println("⚠️ 源目录不存在，无需备份: ${sourceDir.path}")
+                logger.warn("⚠️ 源目录不存在，无需备份: {}", sourceDir.path)
                 return true
             }
             
@@ -79,11 +82,11 @@ object ChatHistoryBackupManager {
             )
             File(backupDir, "_backup_metadata.json").writeText(json.encodeToString(metadata))
             
-            println("✅ 群组历史已备份: $groupId -> ${backupDir.absolutePath}")
-            println("   原因: ${backupType.name} - $reason")
+            logger.info("✅ 群组历史已备份: {} -> {}", groupId, backupDir.absolutePath)
+            logger.info("   原因: {} - {}", backupType.name, reason)
             true
         } catch (e: Exception) {
-            println("❌ 备份群组历史失败: $groupId - ${e.message}")
+            logger.error("❌ 备份群组历史失败: {} - {}", groupId, e.message)
             e.printStackTrace()
             false
         }
@@ -115,10 +118,10 @@ object ChatHistoryBackupManager {
             )
             backupFile.writeText(json.encodeToString(record))
             
-            println("✅ 撤回消息已备份: ${message.messageId} -> ${backupFile.name}")
+            logger.info("✅ 撤回消息已备份: {} -> {}", message.messageId, backupFile.name)
             true
         } catch (e: Exception) {
-            println("❌ 备份撤回消息失败: ${message.messageId} - ${e.message}")
+            logger.error("❌ 备份撤回消息失败: {} - {}", message.messageId, e.message)
             false
         }
     }
@@ -172,7 +175,7 @@ object ChatHistoryBackupManager {
                         val metadata = json.decodeFromString<BackupMetadata>(metadataFile.readText())
                         backups.add(metadata)
                     } catch (e: Exception) {
-                        println("⚠️ 解析备份元数据失败: ${metadataFile.path}")
+                        logger.warn("⚠️ 解析备份元数据失败: {}", metadataFile.path)
                     }
                 }
         }
@@ -189,14 +192,14 @@ object ChatHistoryBackupManager {
         return try {
             val backupDir = File(backupPath)
             if (!backupDir.exists() || !backupDir.isDirectory) {
-                println("❌ 备份目录不存在: $backupPath")
+                logger.error("❌ 备份目录不存在: {}", backupPath)
                 return false
             }
             
             // 读取元数据
             val metadataFile = File(backupDir, "_backup_metadata.json")
             if (!metadataFile.exists()) {
-                println("❌ 备份元数据不存在")
+                logger.error("❌ 备份元数据不存在")
                 return false
             }
             
@@ -216,10 +219,10 @@ object ChatHistoryBackupManager {
             // 删除恢复的元数据文件（避免混淆）
             File(targetDir, "_backup_metadata.json").delete()
             
-            println("✅ 已从备份恢复: $groupId <- ${backupDir.absolutePath}")
+            logger.info("✅ 已从备份恢复: {} <- {}", groupId, backupDir.absolutePath)
             true
         } catch (e: Exception) {
-            println("❌ 恢复备份失败: ${e.message}")
+            logger.error("❌ 恢复备份失败: {}", e.message)
             e.printStackTrace()
             false
         }
@@ -241,15 +244,15 @@ object ChatHistoryBackupManager {
                     try {
                         dateDir.deleteRecursively()
                         deletedCount++
-                        println("🗑️ 已删除过期备份: ${dateDir.path}")
+                        logger.info("🗑️ 已删除过期备份: {}", dateDir.path)
                     } catch (e: Exception) {
-                        println("⚠️ 删除过期备份失败: ${dateDir.path}")
+                        logger.warn("⚠️ 删除过期备份失败: {}", dateDir.path)
                     }
                 }
             }
         
         if (deletedCount > 0) {
-            println("✅ 已清理 $deletedCount 个过期备份目录（保留最近 $retentionDays 天）")
+            logger.info("✅ 已清理 {} 个过期备份目录（保留最近 {} 天）", deletedCount, retentionDays)
         }
         return deletedCount
     }

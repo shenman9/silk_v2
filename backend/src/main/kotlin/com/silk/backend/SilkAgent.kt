@@ -5,6 +5,7 @@ import com.silk.backend.ai.SearchDrivenAgent
 import com.silk.backend.ai.DirectModelAgent
 import com.silk.backend.models.ChatHistoryEntry
 import kotlinx.coroutines.delay
+import org.slf4j.LoggerFactory
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 
@@ -17,6 +18,7 @@ class SilkAgent {
     companion object {
         const val AGENT_ID = "silk_ai_agent"
         const val AGENT_NAME = "🤖 Silk"
+        private val logger = LoggerFactory.getLogger(SilkAgent::class.java)
         
         // AI Agent 触发词
         val AGENT_TRIGGERS = listOf(
@@ -262,7 +264,7 @@ class SilkAgent {
         return try {
             searchAgent?.indexMessage(message, participants) ?: false
         } catch (e: Exception) {
-            println("❌ 索引消息失败: ${e.message}")
+            logger.error("❌ 索引消息失败: {}", e.message)
             false
         }
     }

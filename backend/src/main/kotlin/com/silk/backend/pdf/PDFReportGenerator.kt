@@ -18,6 +18,7 @@ import com.itextpdf.layout.element.Table
 import com.itextpdf.layout.properties.AreaBreakType
 import com.itextpdf.layout.properties.TextAlignment
 import com.itextpdf.layout.properties.UnitValue
+import org.slf4j.LoggerFactory
 import java.io.File
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
@@ -28,7 +29,9 @@ import java.time.format.DateTimeFormatter
  * 支持中文字体
  */
 class PDFReportGenerator {
-    
+
+    private val logger = LoggerFactory.getLogger(PDFReportGenerator::class.java)
+
     // 颜色定义（函数形式，避免跨PDF文档重用）
     private fun primaryColor() = DeviceRgb(25, 118, 210)      // 蓝色
     private fun secondaryColor() = DeviceRgb(76, 175, 80)     // 绿色
@@ -51,7 +54,7 @@ class PDFReportGenerator {
             try {
                 val file = java.io.File(fontPath.split(",")[0])
                 if (file.exists()) {
-                    println("✅ 找到中文字体: $fontPath")
+                    logger.info("✅ 找到中文字体: {}", fontPath)
                     return@lazy fontPath
                 }
             } catch (e: Exception) {
@@ -61,7 +64,7 @@ class PDFReportGenerator {
         }
         
         // 如果都失败，返回 null（使用内置字体）
-        println("⚠️ 未找到系统字体，将使用内置字体")
+        logger.warn("⚠️ 未找到系统字体，将使用内置字体")
         null
     }
     
@@ -79,8 +82,7 @@ class PDFReportGenerator {
                 PdfFontFactory.EmbeddingStrategy.PREFER_NOT_EMBEDDED  // ✅ 预定义字体的正确策略
             )
         } catch (e: Exception) {
-            println("❌ 内置字体加载失败: ${e.message}")
-            e.printStackTrace()
+            logger.error("❌ 内置字体加载失败: {}", e.message, e)
             // ✅ 回退到标准字体
             PdfFontFactory.createFont(com.itextpdf.io.font.constants.StandardFonts.HELVETICA)
         }
@@ -94,8 +96,7 @@ class PDFReportGenerator {
             // 使用 Helvetica 标准字体（清晰、无衬线）
             PdfFontFactory.createFont(com.itextpdf.io.font.constants.StandardFonts.HELVETICA)
         } catch (e: Exception) {
-            println("❌ 英文字体加载失败")
-            e.printStackTrace()
+            logger.error("❌ 英文字体加载失败", e)
             PdfFontFactory.createFont()
         }
     }
@@ -119,7 +120,7 @@ class PDFReportGenerator {
             paragraph.setCharacterSpacing(1.2f)
         } catch (e: Exception) {
             // 如果设置失败，忽略错误，使用默认间距
-            println("⚠️ 设置字符间距失败，使用默认值")
+            logger.warn("⚠️ 设置字符间距失败，使用默认值")
         }
         
         return paragraph
@@ -212,7 +213,7 @@ class PDFReportGenerator {
         
         // 文件名格式：群组名称_日期_时间.pdf（完全无空格）
         val fileName = "${safeTitleName}_$dateTime.pdf"
-        println("📋 生成的文件名: '$fileName' (长度: ${fileName.length})")
+        logger.debug("📋 生成的文件名: '{}' (长度: {})", fileName, fileName.length)
         
         val pdfPath = "${pdfDir.path}/$fileName"
         
@@ -234,17 +235,17 @@ class PDFReportGenerator {
             val chineseFont = createChineseFont()  // 中文字体
             val englishFont = createEnglishFont()  // 英文字体
             
-            println("✅ 字体加载完成：中文字体 + 英文字体")
+            logger.info("✅ 字体加载完成：中文字体 + 英文字体")
             
             // 生成报告标题（包含群组名称和生成时间）
             val reportGeneratedTime = LocalDateTime.now()
             val reportTitle = groupDisplayName ?: sessionName
             
-            println("📋 PDF生成开始: '$reportTitle'")
-            println("   - groupDisplayName: $groupDisplayName")
-            println("   - sessionName: $sessionName")
-            println("   - 诊断步骤数: ${diagnosisResult.stepResults.size}")
-            println("   - 总结报告长度: ${summaryReportText.length}")
+            logger.debug("📋 PDF生成开始: '{}'", reportTitle)
+            logger.debug("📋 groupDisplayName: {}", groupDisplayName)
+            logger.debug("📋 sessionName: {}", sessionName)
+            logger.debug("📋 诊断步骤数: {}", diagnosisResult.stepResults.size)
+            logger.debug("📋 总结报告长度: {}", summaryReportText.length)
             
             addReportHeader(document, reportTitle, reportGeneratedTime, chineseFont, englishFont)
             
@@ -269,19 +270,18 @@ class PDFReportGenerator {
             
             // ✅ 正常关闭文档
             document.close()
-            println("✅ PDF文档已正确关闭")
-            println("✅ PDF 报告已生成并保存: $pdfPath")
+            logger.info("✅ PDF文档已正确关闭")
+            logger.info("✅ PDF 报告已生成并保存: {}", pdfPath)
             
         } catch (e: Exception) {
-            println("❌ PDF 生成失败: ${e.message}")
-            e.printStackTrace()
+            logger.error("❌ PDF 生成失败: {}", e.message, e)
             
             // ✅ 即使生成失败，也尝试关闭文档避免资源泄漏
             try {
                 document?.close()
-                println("✅ 异常处理：文档已关闭")
+                logger.info("✅ 异常处理：文档已关闭")
             } catch (closeEx: Exception) {
-                println("⚠️ 异常处理：关闭文档也失败: ${closeEx.message}")
+                logger.warn("⚠️ 异常处理：关闭文档也失败: {}", closeEx.message)
                 // 忽略关闭错误
             }
             
@@ -488,7 +488,7 @@ class PDFReportGenerator {
             formattedMessages.joinToString("\n\n")
             
         } catch (e: Exception) {
-            println("⚠️ 提取医生指令失败: ${e.message}")
+            logger.warn("⚠️ 提取医生指令失败: {}", e.message)
             ""
         }
     }
@@ -615,7 +615,7 @@ class PDFReportGenerator {
             formattedMessages.take(5).joinToString("\n\n")
             
         } catch (e: Exception) {
-            println("⚠️ 提取用户症状失败: ${e.message}")
+            logger.warn("⚠️ 提取用户症状失败: {}", e.message)
             "提取症状失败"
         }
     }
@@ -720,7 +720,7 @@ class PDFReportGenerator {
             // 结果内容（简化版，适合表格显示）
             val resultText = if (stepResult.success) {
                 val formattedText = formatResultForTable(stepResult.result)
-                println("   步骤 ${index + 1} ($stepName): 原始长度=${stepResult.result.length}, 格式化后=${formattedText.length}")
+                logger.debug("📋 步骤 {} ({}): 原始长度={}, 格式化后={}", index + 1, stepName, stepResult.result.length, formattedText.length)
                 formattedText
             } else {
                 "执行失败：${stepResult.error ?: "未知错误"}"

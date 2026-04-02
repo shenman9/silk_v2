@@ -1,19 +1,35 @@
 <configuration>
+    <variable name="LOG_LEVEL" value="${log.level:-INFO}"/>
+
+    <!-- 控制台 appender：简洁格式 -->
     <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
         <encoder>
-            <!-- ✅ 简化日志格式，减少输出量 -->
             <pattern>%d{HH:mm:ss} %-5level %logger{20} - %msg%n</pattern>
+            <charset>UTF-8</charset>
         </encoder>
     </appender>
 
-    <root level="INFO">
+    <!-- 文件 appender：详细格式 + 按日期和大小滚动 -->
+    <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>logs/silk-backend.log</file>
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>logs/silk-backend.%d{yyyy-MM-dd}.%i.log</fileNamePattern>
+            <maxFileSize>50MB</maxFileSize>
+            <maxHistory>30</maxHistory>
+            <totalSizeCap>1GB</totalSizeCap>
+        </rollingPolicy>
+    </appender>
+
+    <root level="${LOG_LEVEL}">
         <appender-ref ref="STDOUT"/>
+        <appender-ref ref="FILE"/>
     </root>
 
     <logger name="io.ktor" level="INFO"/>
-    <!-- ✅ 保持INFO级别，但在代码中保留关键的模型调用日志 -->
-    <logger name="com.silk" level="INFO"/>
-    <!-- ✅ AI模块的日志保持INFO级别，显示关键操作 -->
-    <logger name="com.silk.backend.ai" level="INFO"/>
+    <logger name="com.silk" level="${LOG_LEVEL}"/>
+    <logger name="com.silk.backend.ai" level="${LOG_LEVEL}"/>
 </configuration>
-

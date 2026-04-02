@@ -20,9 +20,11 @@ import java.io.File
 import java.time.LocalDate
 import java.util.*
 import java.util.concurrent.ConcurrentHashMap
+import org.slf4j.LoggerFactory
 
 // 群组聊天服务器映射（每个群组一个ChatServer实例）
 private val groupChatServers = ConcurrentHashMap<String, ChatServer>()
+private val logger = LoggerFactory.getLogger("Routing")
 
 /**
  * 获取或创建指定群组的ChatServer
@@ -31,7 +33,7 @@ private fun getGroupChatServer(groupId: String): ChatServer {
     return groupChatServers.getOrPut(groupId) {
         val sessionName = "group_$groupId"
         ChatServer(sessionName).also {
-            println("🆕 创建新的群组聊天服务器: $sessionName")
+            logger.info("🆕 创建新的群组聊天服务器: {}", sessionName)
         }
     }
 }
@@ -45,7 +47,7 @@ suspend fun broadcastSystemStatus(groupId: String, status: String) {
     if (chatServer != null) {
         chatServer.broadcastSystemStatus(status)
     } else {
-        println("⚠️ [broadcastSystemStatus] 群组 $groupId 不存在")
+        logger.warn("⚠️ [broadcastSystemStatus] 群组 {} 不存在", groupId)
     }
 }
 
@@ -72,9 +74,9 @@ suspend fun broadcastFileMessage(
             type = MessageType.FILE
         )
         chatServer.broadcast(message)
-        println("📎 [broadcastFileMessage] 文件消息已广播到群组 $groupId: $fileName")
+        logger.debug("📎 [broadcastFileMessage] 文件消息已广播到群组 {}: {}", groupId, fileName)
     } else {
-        println("⚠️ [broadcastFileMessage] 群组 $groupId 不存在")
+        logger.warn("⚠️ [broadcastFileMessage] 群组 {} 不存在", groupId)
     }
 }
 
@@ -402,7 +404,7 @@ fun Application.configureRouting() {
                 val settings = UserSettingsRepository.getUserSettings(userId)
                 call.respond(UserSettingsResponse(true, "获取设置成功", settings))
             } catch (e: Exception) {
-                println("❌ 获取用户设置失败: ${e.message}")
+                logger.error("❌ 获取用户设置失败: {}", e.message)
                 call.respond(
                     HttpStatusCode.InternalServerError,
                     UserSettingsResponse(false, "获取设置失败: ${e.message}")
@@ -442,7 +444,7 @@ fun Application.configureRouting() {
                 
                 call.respond(UserSettingsResponse(true, "设置更新成功", settings))
             } catch (e: Exception) {
-                println("❌ 更新用户设置失败: ${e.message}")
+                logger.error("❌ 更新用户设置失败: {}", e.message)
                 call.respond(
                     HttpStatusCode.InternalServerError,
                     UserSettingsResponse(false, "更新设置失败: ${e.message}")
@@ -455,13 +457,13 @@ fun Application.configureRouting() {
             val sessionName = call.parameters["sessionName"] ?: "default_room"
             val fileName = call.parameters.getAll("fileName")?.joinToString("/") ?: ""
             
-            println("📥 PDF下载请求:")
-            println("   sessionName: $sessionName")
-            println("   fileName: $fileName")
+            logger.debug("📥 PDF下载请求:")
+            logger.debug("   sessionName: {}", sessionName)
+            logger.debug("   fileName: {}", fileName)
             
             // 获取当前工作目录
             val workingDir = System.getProperty("user.dir")
-            println("   当前工作目录: $workingDir")
+            logger.debug("   当前工作目录: {}", workingDir)
             
             // 尝试多个可能的路径（适配服务器和本地）
             val possiblePaths = listOf(
@@ -477,10 +479,10 @@ fun Application.configureRouting() {
                 "/Users/mac/Documents/Silk/backend/chat_history/$sessionName/reports/$fileName"
             )
             
-            println("   尝试的路径:")
+            logger.debug("   尝试的路径:")
             possiblePaths.forEachIndexed { index, path ->
                 val file = File(path)
-                println("     ${index + 1}. $path (exists=${file.exists()}, isFile=${file.isFile})")
+                logger.debug("     {}. {} (exists={}, isFile={})", index + 1, path, file.exists(), file.isFile)
             }
             
             val pdfFile = possiblePaths
@@ -488,8 +490,8 @@ fun Application.configureRouting() {
                 .firstOrNull { it.exists() && it.isFile }
             
             if (pdfFile != null) {
-                println("✅ 找到PDF文件: ${pdfFile.absolutePath}")
-                println("   文件大小: ${pdfFile.length()} bytes")
+                logger.info("✅ 找到PDF文件: {}", pdfFile.absolutePath)
+                logger.debug("   文件大小: {} bytes", pdfFile.length())
                 
                 // ✅ 验证文件是否为有效的PDF（检查文件头）
                 try {
@@ -503,11 +505,11 @@ fun Application.configureRouting() {
                                    header[3] == 0x46.toByte()     // F
                         
                         if (!isPdf) {
-                            println("⚠️ 警告：文件不是有效的PDF格式")
+                            logger.warn("⚠️ 警告：文件不是有效的PDF格式")
                         }
                     }
                 } catch (e: Exception) {
-                    println("⚠️ 无法验证PDF格式: ${e.message}")
+                    logger.warn("⚠️ 无法验证PDF格式: {}", e.message)
                 }
                 
                 // ✅ 设置正确的 Content-Type
@@ -533,7 +535,7 @@ fun Application.configureRouting() {
                 call.respondFile(pdfFile)
             } else {
                 val errorMsg = "PDF 文件未找到: $fileName\n\n尝试的路径:\n${possiblePaths.mapIndexed { i, p -> "${i+1}. $p" }.joinToString("\n")}"
-                println("❌ $errorMsg")
+                logger.error("❌ {}", errorMsg)
                 call.respondText(errorMsg, status = HttpStatusCode.NotFound)
             }
         }
@@ -545,7 +547,7 @@ fun Application.configureRouting() {
                 val response = AuthService.register(request)
                 call.respond(response)
             } catch (e: Exception) {
-                println("❌ 注册失败: ${e.message}")
+                logger.error("❌ 注册失败: {}", e.message)
                 call.respond(HttpStatusCode.BadRequest, AuthResponse(false, "请求格式错误"))
             }
         }
@@ -556,7 +558,7 @@ fun Application.configureRouting() {
                 val response = AuthService.login(request)
                 call.respond(response)
             } catch (e: Exception) {
-                println("❌ 登录失败: ${e.message}")
+                logger.error("❌ 登录失败: {}", e.message)
                 call.respond(HttpStatusCode.BadRequest, AuthResponse(false, "请求格式错误"))
             }
         }
@@ -592,7 +594,7 @@ fun Application.configureRouting() {
                 
                 call.respond(response)
             } catch (e: Exception) {
-                println("❌ 创建群组失败: ${e.message}")
+                logger.error("❌ 创建群组失败: {}", e.message)
                 call.respond(HttpStatusCode.BadRequest, GroupResponse(false, "请求格式错误"))
             }
         }
@@ -603,7 +605,7 @@ fun Application.configureRouting() {
                 val response = GroupService.joinGroup(request)
                 call.respond(response)
             } catch (e: Exception) {
-                println("❌ 加入群组失败: ${e.message}")
+                logger.error("❌ 加入群组失败: {}", e.message)
                 call.respond(HttpStatusCode.BadRequest, GroupResponse(false, "请求格式错误"))
             }
         }
@@ -698,11 +700,11 @@ fun Application.configureRouting() {
                     call.respond(ContactResponse(false, "已有待处理的请求"))
                 }
             } catch (e: Exception) {
-                println("❌ 发送联系人请求失败: ${e.message}")
+                logger.error("❌ 发送联系人请求失败: {}", e.message)
                 call.respond(HttpStatusCode.BadRequest, ContactResponse(false, "请求格式错误"))
             }
         }
-        
+
         // 发送联系人请求（通过用户ID，用于从聊天中添加）
         post("/contacts/request-by-id") {
             try {
@@ -735,11 +737,11 @@ fun Application.configureRouting() {
                     call.respond(ContactResponse(false, "已有待处理的请求"))
                 }
             } catch (e: Exception) {
-                println("❌ 发送联系人请求失败: ${e.message}")
+                logger.error("❌ 发送联系人请求失败: {}", e.message)
                 call.respond(HttpStatusCode.BadRequest, ContactResponse(false, "请求格式错误"))
             }
         }
-        
+
         // 处理联系人请求（接受/拒绝）
         post("/contacts/handle-request") {
             try {
@@ -765,7 +767,7 @@ fun Application.configureRouting() {
                     call.respond(ContactResponse(false, "处理请求失败"))
                 }
             } catch (e: Exception) {
-                println("❌ 处理联系人请求失败: ${e.message}")
+                logger.error("❌ 处理联系人请求失败: {}", e.message)
                 call.respond(HttpStatusCode.BadRequest, ContactResponse(false, "请求格式错误"))
             }
         }
@@ -811,7 +813,7 @@ fun Application.configureRouting() {
                     }
                 }
             } catch (e: Exception) {
-                println("❌ 对话会话失败: ${e.message}")
+                logger.error("❌ 对话会话失败: {}", e.message)
                 call.respond(HttpStatusCode.BadRequest, PrivateChatResponse(false, "请求格式错误"))
             }
         }
@@ -845,7 +847,7 @@ fun Application.configureRouting() {
                     call.respond(SimpleResponse(false, "添加成员失败"))
                 }
             } catch (e: Exception) {
-                println("❌ 添加成员失败: ${e.message}")
+                logger.error("❌ 添加成员失败: {}", e.message)
                 call.respond(HttpStatusCode.BadRequest, SimpleResponse(false, "请求格式错误"))
             }
         }
@@ -879,7 +881,7 @@ fun Application.configureRouting() {
                     call.respond(LeaveGroupResponse(false, "退出群组失败"))
                 }
             } catch (e: Exception) {
-                println("❌ 退出群组失败: ${e.message}")
+                logger.error("❌ 退出群组失败: {}", e.message)
                 call.respond(HttpStatusCode.BadRequest, LeaveGroupResponse(false, "请求格式错误"))
             }
         }
@@ -911,13 +913,13 @@ fun Application.configureRouting() {
                 if (success) {
                     // 清理群组的ChatServer实例
                     groupChatServers.remove(groupId)
-                    println("🗑️ 群组 $groupId 已被群主 ${request.userId} 删除")
+                    logger.info("🗑️ 群组 {} 已被群主 {} 删除", groupId, request.userId)
                     call.respond(SimpleResponse(true, message))
                 } else {
                     call.respond(SimpleResponse(false, message))
                 }
             } catch (e: Exception) {
-                println("❌ 删除群组失败: ${e.message}")
+                logger.error("❌ 删除群组失败: {}", e.message)
                 call.respond(HttpStatusCode.BadRequest, SimpleResponse(false, "请求格式错误"))
             }
         }
@@ -1189,7 +1191,7 @@ fun Application.configureRouting() {
                 }
                 
                 if (existingGroup != null) {
-                    println("✅ 找到用户 ${user.fullName} 与 Silk 的私聊: ${existingGroup.name}")
+                    logger.info("✅ 找到用户 {} 与 Silk 的私聊: {}", user.fullName, existingGroup.name)
                     call.respond(PrivateChatResponse(true, "打开 Silk 对话", existingGroup, isNew = false))
                 } else {
                     // 创建新的 Silk 私聊群组
@@ -1223,7 +1225,7 @@ fun Application.configureRouting() {
                         // 创建聊天历史文件夹
                         val sessionDir = java.io.File("chat_history/group_$groupId")
                         sessionDir.mkdirs()
-                        println("📁 Silk 私聊历史文件夹已创建: ${sessionDir.path}")
+                        logger.debug("📁 Silk 私聊历史文件夹已创建: {}", sessionDir.path)
                         
                         com.silk.backend.database.Group(
                             id = groupId,
@@ -1235,11 +1237,11 @@ fun Application.configureRouting() {
                         )
                     }
                     
-                    println("🆕 创建用户 ${user.fullName} 与 Silk 的私聊: $groupName")
+                    logger.info("🆕 创建用户 {} 与 Silk 的私聊: {}", user.fullName, groupName)
                     call.respond(PrivateChatResponse(true, "创建 Silk 对话", newGroup, isNew = true))
                 }
             } catch (e: Exception) {
-                println("❌ 创建 Silk 私聊失败: ${e.message}")
+                logger.error("❌ 创建 Silk 私聊失败: {}", e.message)
                 e.printStackTrace()
                 call.respond(HttpStatusCode.BadRequest, PrivateChatResponse(false, "请求格式错误"))
             }
@@ -1279,11 +1281,11 @@ fun Application.configureRouting() {
                 // 广播消息到群组
                 groupChatServer.broadcast(message)
                 
-                println("📨 转发消息到群组 ${request.groupId}: ${request.content.take(50)}...")
+                logger.debug("📨 转发消息到群组 {}: {}...", request.groupId, request.content.take(50))
                 
                 call.respond(SimpleResponse(true, "消息发送成功"))
             } catch (e: Exception) {
-                println("❌ 发送消息失败: ${e.message}")
+                logger.error("❌ 发送消息失败: {}", e.message)
                 call.respond(HttpStatusCode.BadRequest, SimpleResponse(false, "发送失败: ${e.message}"))
             }
         }
@@ -1310,13 +1312,13 @@ fun Application.configureRouting() {
                 )
                 
                 if (result.success) {
-                    println("🗑️ 消息已撤回: ${request.messageId} by ${request.userId}")
+                    logger.info("🗑️ 消息已撤回: {} by {}", request.messageId, request.userId)
                     call.respond(SimpleResponse(true, result.message))
                 } else {
                     call.respond(SimpleResponse(false, result.message))
                 }
             } catch (e: Exception) {
-                println("❌ 撤回消息失败: ${e.message}")
+                logger.error("❌ 撤回消息失败: {}", e.message)
                 e.printStackTrace()
                 call.respond(HttpStatusCode.BadRequest, SimpleResponse(false, "撤回失败: ${e.message}"))
             }
@@ -1327,7 +1329,7 @@ fun Application.configureRouting() {
             val userName = call.parameters["userName"] ?: "User_${userId.take(6)}"
             val groupId = call.parameters["groupId"] ?: "default_room"
             
-            println("用户连接: $userName ($userId) -> 群组: $groupId")
+            logger.info("👤 用户连接: {} ({}) -> 群组: {}", userName, userId, groupId)
             
             // 为每个群组获取或创建独立的ChatServer
             val groupChatServer = getGroupChatServer(groupId)
@@ -1343,16 +1345,16 @@ fun Application.configureRouting() {
                                 val message = Json.decodeFromString<Message>(receivedText)
                                 groupChatServer.broadcast(message)
                             } catch (e: Exception) {
-                                println("解析消息失败: ${e.message}")
+                                logger.warn("⚠️ 解析消息失败: {}", e.message)
                             }
                         }
                         else -> {}
                     }
                 }
             } catch (e: Exception) {
-                println("WebSocket 错误: ${e.localizedMessage}")
+                logger.error("❌ WebSocket 错误: {}", e.localizedMessage)
             } finally {
-                println("用户断开: $userName ($userId)")
+                logger.info("👤 用户断开: {} ({})", userName, userId)
                 groupChatServer.leave(userId, userName)
             }
         }

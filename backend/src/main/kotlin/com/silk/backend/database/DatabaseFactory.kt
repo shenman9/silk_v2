@@ -3,11 +3,14 @@ package com.silk.backend.database
 import org.jetbrains.exposed.sql.Database
 import org.jetbrains.exposed.sql.SchemaUtils
 import org.jetbrains.exposed.sql.transactions.transaction
+import org.slf4j.LoggerFactory
 
 /**
  * 数据库工厂：初始化数据库连接和创建表
  */
 object DatabaseFactory {
+    private val logger = LoggerFactory.getLogger(DatabaseFactory::class.java)
+
     fun init() {
         // 使用 SQLite 数据库
         val database = Database.connect(
@@ -20,7 +23,7 @@ object DatabaseFactory {
             SchemaUtils.create(Users, Groups, GroupMembers, Contacts, ContactRequests, UserSettingsTable)
         }
         
-        println("✅ 数据库初始化完成")
+        logger.info("✅ 数据库初始化完成")
     }
 }
 

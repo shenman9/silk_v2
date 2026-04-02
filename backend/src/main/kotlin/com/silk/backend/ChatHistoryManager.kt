@@ -3,6 +3,7 @@ package com.silk.backend
 import com.silk.backend.models.*
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import org.slf4j.LoggerFactory
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
@@ -22,11 +23,12 @@ class ChatHistoryManager(
         prettyPrint = true
         ignoreUnknownKeys = true
     }
+    private val logger = LoggerFactory.getLogger(ChatHistoryManager::class.java)
     
     init {
         // 确保基础目录存在
         File(baseDir).mkdirs()
-        println("📁 聊天历史目录已创建: $baseDir")
+        logger.info("📁 聊天历史目录已创建: {}", baseDir)
     }
     
     /**
@@ -77,9 +79,9 @@ class ChatHistoryManager(
         val backupFile = File("${file.parent}/${file.nameWithoutExtension}.corrupted_$timestamp.${file.extension}")
         try {
             Files.copy(file.toPath(), backupFile.toPath(), StandardCopyOption.REPLACE_EXISTING)
-            println("⚠️ 已备份损坏文件: ${file.name} -> ${backupFile.name} (原因: $reason)")
+            logger.warn("⚠️ 已备份损坏文件: {} -> {} (原因: {})", file.name, backupFile.name, reason)
         } catch (e: Exception) {
-            println("❌ 备份损坏文件失败: ${e.message}")
+            logger.error("❌ 备份损坏文件失败: {}", e.message)
         }
     }
     
@@ -123,10 +125,10 @@ class ChatHistoryManager(
             val chatHistory = ChatHistory(sessionId = sessionData.sessionId)
             saveChatHistory(sessionName, chatHistory)
         } else {
-            println("🛡️ 检测到已有历史文件，跳过空历史初始化: $sessionName")
+            logger.info("🛡️ 检测到已有历史文件，跳过空历史初始化: {}", sessionName)
         }
         
-        println("✅ 会话已创建: $sessionName (${sessionData.sessionId})")
+        logger.info("✅ 会话已创建: {} ({})", sessionName, sessionData.sessionId)
         return sessionData
     }
     
@@ -144,7 +146,7 @@ class ChatHistoryManager(
         val sessionFile = getSessionFile(sessionName)
         if (sessionFile.exists()) {
             // 文件存在但解析失败，说明文件损坏，不要创建新会话
-            println("⚠️ 会话文件损坏，拒绝创建新会话: $sessionName")
+            logger.warn("⚠️ 会话文件损坏，拒绝创建新会话: {}", sessionName)
             return null
         }
 
@@ -153,7 +155,7 @@ class ChatHistoryManager(
         if (historyFile.exists()) {
             val history = loadChatHistory(sessionName)
             if (history == null) {
-                println("⚠️ 检测到历史文件但无法解析，拒绝创建新会话避免覆盖: $sessionName")
+                logger.warn("⚠️ 检测到历史文件但无法解析，拒绝创建新会话避免覆盖: {}", sessionName)
                 return null
             }
 
@@ -163,7 +165,7 @@ class ChatHistoryManager(
                 createdAt = System.currentTimeMillis()
             )
             saveSessionData(sessionName, recoveredSessionData)
-            println("🔧 已从历史文件恢复 session 元数据: $sessionName")
+            logger.info("🔧 已从历史文件恢复 session 元数据: {}", sessionName)
             return recoveredSessionData
         }
         
@@ -181,13 +183,13 @@ class ChatHistoryManager(
             try {
                 val content = sessionFile.readText()
                 if (content.isBlank()) {
-                    println("❌ 会话文件为空: ${sessionFile.path}")
+                    logger.error("❌ 会话文件为空: {}", sessionFile.path)
                     backupCorruptedFile(sessionFile, "文件为空")
                     return null
                 }
                 json.decodeFromString<SessionData>(content)
             } catch (e: Exception) {
-                println("❌ 加载会话数据失败: ${e.message}")
+                logger.error("❌ 加载会话数据失败: {}", e.message)
                 backupCorruptedFile(sessionFile, e.message ?: "JSON解析错误")
                 null
             }
@@ -206,9 +208,9 @@ class ChatHistoryManager(
         val sessionFile = File("$sessionDir/session.json")
         try {
             atomicWrite(sessionFile, json.encodeToString(sessionData))
-            println("💾 会话数据已保存: $sessionName")
+            logger.debug("💾 会话数据已保存: {}", sessionName)
         } catch (e: Exception) {
-            println("❌ 保存会话数据失败: ${e.message}")
+            logger.error("❌ 保存会话数据失败: {}", e.message)
         }
     }
     
@@ -222,19 +224,19 @@ class ChatHistoryManager(
             try {
                 val content = historyFile.readText()
                 if (content.isBlank()) {
-                    println("❌ 历史文件为空: ${historyFile.path}")
+                    logger.error("❌ 历史文件为空: {}", historyFile.path)
                     backupCorruptedFile(historyFile, "文件为空")
                     return null
                 }
                 val history = json.decodeFromString<ChatHistory>(content)
                 // 确保messages列表存在
                 if (history.messages == null) {
-                    println("⚠️ 历史文件缺少messages字段，已修复: $sessionName")
+                    logger.warn("⚠️ 历史文件缺少messages字段，已修复: {}", sessionName)
                     return ChatHistory(sessionId = history.sessionId, messages = mutableListOf())
                 }
                 history
             } catch (e: Exception) {
-                println("❌ 加载聊天历史失败: ${e.message}")
+                logger.error("❌ 加载聊天历史失败: {}", e.message)
                 backupCorruptedFile(historyFile, e.message ?: "JSON解析错误")
                 null
             }
@@ -253,9 +255,9 @@ class ChatHistoryManager(
         val historyFile = File("$sessionDir/chat_history.json")
         try {
             atomicWrite(historyFile, json.encodeToString(chatHistory))
-            println("💾 聊天历史已保存: $sessionName (${chatHistory.messages.size} 条消息)")
+            logger.debug("💾 聊天历史已保存: {} ({} 条消息)", sessionName, chatHistory.messages.size)
         } catch (e: Exception) {
-            println("❌ 保存聊天历史失败: ${e.message}")
+            logger.error("❌ 保存聊天历史失败: {}", e.message)
         }
     }
     
@@ -270,7 +272,7 @@ class ChatHistoryManager(
         val chatHistory = loadChatHistory(sessionName) ?: run {
             // 如果历史文件存在但加载失败，拒绝写入，避免覆盖潜在可恢复数据
             if (historyFile.exists()) {
-                println("⚠️ 历史文件存在但无法解析，跳过写入避免覆盖: $sessionName")
+                logger.warn("⚠️ 历史文件存在但无法解析，跳过写入避免覆盖: {}", sessionName)
                 return
             }
             val sessionId = loadSessionData(sessionName)?.sessionId ?: sessionName
@@ -298,7 +300,7 @@ class ChatHistoryManager(
         val historyFile = getHistoryFile(sessionName)
         val chatHistory = loadChatHistory(sessionName) ?: run {
             if (historyFile.exists()) {
-                println("⚠️ 历史文件存在但无法解析，跳过角色提示写入避免覆盖: $sessionName")
+                logger.warn("⚠️ 历史文件存在但无法解析，跳过角色提示写入避免覆盖: {}", sessionName)
                 return
             }
             val sessionId = loadSessionData(sessionName)?.sessionId ?: sessionName
@@ -306,7 +308,7 @@ class ChatHistoryManager(
         }
         chatHistory.rolePrompt = rolePrompt
         saveChatHistory(sessionName, chatHistory)
-        println("🎭 角色提示已更新: $sessionName -> ${rolePrompt?.take(50)}...")
+        logger.debug("🎭 角色提示已更新: {} -> {}...", sessionName, rolePrompt?.take(50))
     }
     
     /**
@@ -326,7 +328,7 @@ class ChatHistoryManager(
         userName: String
     ) {
         var sessionData = ensureSessionExists(sessionName) ?: run {
-            println("⚠️ 无法加载或创建会话，跳过成员添加: $sessionName")
+            logger.warn("⚠️ 无法加载或创建会话，跳过成员添加: {}", sessionName)
             return
         }
         
@@ -354,7 +356,7 @@ class ChatHistoryManager(
         }
         
         saveSessionData(sessionName, sessionData)
-        println("👤 成员已加入: $userName ($userId)")
+        logger.debug("👤 成员已加入: {} ({})", userName, userId)
     }
     
     /**
@@ -376,7 +378,7 @@ class ChatHistoryManager(
                 )
             )
             saveSessionData(sessionName, sessionData)
-            println("👋 成员已离开: ${member.userName} ($userId)")
+            logger.debug("👋 成员已离开: {} ({})", member.userName, userId)
         }
     }
     
@@ -409,7 +411,7 @@ class ChatHistoryManager(
         
         if (chatHistory.messages.size < initialSize) {
             saveChatHistory(sessionName, chatHistory)
-            println("🗑️ 消息已删除: $messageId (会话: $sessionName)")
+            logger.info("🗑️ 消息已删除: {} (会话: {})", messageId, sessionName)
             return true
         }
         
@@ -433,7 +435,7 @@ class ChatHistoryManager(
         
         if (deletedCount > 0) {
             saveChatHistory(sessionName, chatHistory)
-            println("🗑️ 批量删除消息: $deletedCount 条 (会话: $sessionName)")
+            logger.info("🗑️ 批量删除消息: {} 条 (会话: {})", deletedCount, sessionName)
         }
         
         return deletedCount
@@ -483,7 +485,7 @@ class ChatHistoryManager(
             }
         }
         
-        println("🔍 查找AI回复: 用户消息 $userMessageId -> 找到 ${agentReplies.size} 条AI回复")
+        logger.debug("🔍 查找AI回复: 用户消息 {} -> 找到 {} 条AI回复", userMessageId, agentReplies.size)
         return agentReplies
     }
     
