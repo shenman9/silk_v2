@@ -4,6 +4,7 @@ import com.silk.backend.ChatHistoryBackupManager
 import org.jetbrains.exposed.sql.*
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
 import org.jetbrains.exposed.sql.transactions.transaction
+import org.slf4j.LoggerFactory
 import java.util.UUID
 import kotlin.random.Random
 
@@ -11,7 +12,8 @@ import kotlin.random.Random
  * 群组数据访问层
  */
 object GroupRepository {
-    
+    private val logger = LoggerFactory.getLogger(GroupRepository::class.java)
+
     /**
      * 创建新群组
      * @param name 群组名称
@@ -26,7 +28,7 @@ object GroupRepository {
                     .singleOrNull()
                 
                 if (existingGroup != null) {
-                    println("❌ 群组名已存在: $name")
+                    logger.error("❌ 群组名已存在: {}", name)
                     return@transaction null
                 }
                 
@@ -51,16 +53,16 @@ object GroupRepository {
                 // 创建群组的聊天历史文件夹
                 val sessionDir = java.io.File("chat_history/group_$groupId")
                 sessionDir.mkdirs()
-                println("📁 群组聊天历史文件夹已创建: ${sessionDir.path}")
-                
+                logger.info("📁 群组聊天历史文件夹已创建: {}", sessionDir.path)
+
                 findGroupById(groupId)
             }
         } catch (e: Exception) {
-            println("❌ 创建群组失败: ${e.message}")
+            logger.error("❌ 创建群组失败: {}", e.message)
             null
         }
     }
-    
+
     /**
      * 根据ID查找群组
      */
@@ -149,7 +151,7 @@ object GroupRepository {
             }
             true
         } catch (e: Exception) {
-            println("❌ 添加用户到群组失败: ${e.message}")
+            logger.error("❌ 添加用户到群组失败: {}", e.message)
             false
         }
     }
@@ -230,7 +232,7 @@ object GroupRepository {
             val commonGroupIds = user1Groups.intersect(user2Groups)
             
             if (commonGroupIds.isEmpty()) {
-                println("ℹ️ 未找到 $user1Id 和 $user2Id 的共同群组")
+                logger.debug("ℹ️ 未找到 {} 和 {} 的共同群组", user1Id, user2Id)
                 return@transaction null
             }
             
@@ -256,9 +258,9 @@ object GroupRepository {
             
             if (selected != null) {
                 val selectedMemberCount = candidates.first { it.first.id == selected.id }.second
-                println("✅ 找到共同会话群组: ${selected.name} (${selected.id}), 成员数: $selectedMemberCount")
+                logger.info("✅ 找到共同会话群组: {} ({}), 成员数: {}", selected.name, selected.id, selectedMemberCount)
             } else {
-                println("ℹ️ 未找到 $user1Id 和 $user2Id 的有效共同群组")
+                logger.debug("ℹ️ 未找到 {} 和 {} 的有效共同群组", user1Id, user2Id)
             }
             
             selected
@@ -299,16 +301,16 @@ object GroupRepository {
                 // 创建聊天历史文件夹
                 val sessionDir = java.io.File("chat_history/group_$groupId")
                 sessionDir.mkdirs()
-                println("📁 群组聊天历史文件夹已创建: ${sessionDir.path}")
-                
+                logger.info("📁 群组聊天历史文件夹已创建: {}", sessionDir.path)
+
                 findGroupById(groupId)
             }
         } catch (e: Exception) {
-            println("❌ 创建群组失败: ${e.message}")
+            logger.error("❌ 创建群组失败: {}", e.message)
             null
         }
     }
-    
+
     // ==================== 退出/删除群组 ====================
     
     /**
@@ -324,7 +326,7 @@ object GroupRepository {
                 }.count() > 0
                 
                 if (!isMember) {
-                    println("⚠️ 用户 $userId 不在群组 $groupId 中")
+                    logger.warn("⚠️ 用户 {} 不在群组 {} 中", userId, groupId)
                     return@transaction Pair(false, false)
                 }
                 
@@ -332,7 +334,7 @@ object GroupRepository {
                 GroupMembers.deleteWhere { 
                     (GroupMembers.groupId eq groupId) and (GroupMembers.userId eq userId) 
                 }
-                println("👋 用户 $userId 已退出群组 $groupId")
+                logger.info("👋 用户 {} 已退出群组 {}", userId, groupId)
                 
                 // 检查群组剩余成员数
                 val remainingMembers = GroupMembers.select { GroupMembers.groupId eq groupId }.count()
@@ -346,7 +348,7 @@ object GroupRepository {
                 }
             }
         } catch (e: Exception) {
-            println("❌ 退出群组失败: ${e.message}")
+            logger.error("❌ 退出群组失败: {}", e.message)
             Pair(false, false)
         }
     }
@@ -363,7 +365,7 @@ object GroupRepository {
                 // 删除群组
                 Groups.deleteWhere { Groups.id eq groupId }
                 
-                println("🗑️ 群组 $groupId 已删除")
+                logger.info("🗑️ 群组 {} 已删除", groupId)
             }
             
             // 删除聊天历史目录
@@ -376,7 +378,7 @@ object GroupRepository {
                     reason = "deleteGroupInternal before deleteRecursively"
                 )
                 sessionDir.deleteRecursively()
-                println("📁 群组聊天历史目录已删除: ${sessionDir.path}")
+                logger.info("📁 群组聊天历史目录已删除: {}", sessionDir.path)
             }
             
             // 清理未读追踪数据
@@ -384,11 +386,11 @@ object GroupRepository {
             
             true
         } catch (e: Exception) {
-            println("❌ 删除群组失败: ${e.message}")
+            logger.error("❌ 删除群组失败: {}", e.message)
             false
         }
     }
-    
+
     /**
      * 删除群组及其聊天历史
      */
@@ -433,7 +435,7 @@ object GroupRepository {
                 }
             }
         } catch (e: Exception) {
-            println("❌ 删除群组失败: ${e.message}")
+            logger.error("❌ 删除群组失败: {}", e.message)
             Triple(false, "删除群组失败: ${e.message}", emptyList())
         }
     }

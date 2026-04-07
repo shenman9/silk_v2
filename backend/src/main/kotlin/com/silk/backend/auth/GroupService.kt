@@ -1,11 +1,13 @@
 package com.silk.backend.auth
 
 import com.silk.backend.database.*
+import org.slf4j.LoggerFactory
 
 /**
  * 群组管理服务
  */
 object GroupService {
+    private val logger = LoggerFactory.getLogger(GroupService::class.java)
     
     /**
      * 创建新群组
@@ -33,7 +35,7 @@ object GroupService {
             return GroupResponse(false, "创建群组失败，请稍后重试")
         }
         
-        println("✅ 群组创建成功: ${group.name} (邀请码: ${group.invitationCode})")
+        logger.info("✅ 群组创建成功: {} (邀请码: {})", group.name, group.invitationCode)
         
         return GroupResponse(true, "群组创建成功", group)
     }
@@ -93,7 +95,7 @@ object GroupService {
             return GroupResponse(false, "加入群组失败")
         }
         
-        println("✅ 用户 ${user.fullName} 加入群组: ${group.name}")
+        logger.info("✅ 用户 {} 加入群组: {}", user.fullName, group.name)
         
         return GroupResponse(true, "成功加入群组", group)
     }

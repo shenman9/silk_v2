@@ -2,12 +2,14 @@ package com.silk.backend
 
 import java.nio.file.Files
 import java.nio.file.Paths
+import org.slf4j.LoggerFactory
 
 /**
  * 从项目根目录的 .env 文件加载配置，供后端在未通过 shell 加载 .env 时使用。
  * 在 Application.main() 开头调用 load()，AIConfig 会优先使用此处加载的值。
  */
 object EnvLoader {
+    private val logger = LoggerFactory.getLogger(EnvLoader::class.java)
     private var env: Map<String, String> = emptyMap()
 
     fun load() {
@@ -20,11 +22,11 @@ object EnvLoader {
         for (path in candidates) {
             if (Files.isRegularFile(path)) {
                 env = parseEnvFile(path)
-                println("✅ [EnvLoader] 已加载 .env: ${path.toAbsolutePath()}")
+                logger.info("✅ [EnvLoader] 已加载 .env: {}", path.toAbsolutePath())
                 return
             }
         }
-        println("⚠️ [EnvLoader] 未找到 .env 文件，将使用系统环境变量")
+        logger.warn("⚠️ [EnvLoader] 未找到 .env 文件，将使用系统环境变量")
     }
 
     fun get(key: String): String? = env[key]?.trim()?.takeIf { it.isNotBlank() }
@@ -45,7 +47,7 @@ object EnvLoader {
                 map[key] = value
             }
         } catch (e: Exception) {
-            println("⚠️ [EnvLoader] 读取 .env 失败: ${e.message}")
+            logger.warn("⚠️ [EnvLoader] 读取 .env 失败: {}", e.message)
         }
         return map
     }

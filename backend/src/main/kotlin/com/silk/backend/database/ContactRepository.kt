@@ -3,12 +3,14 @@ package com.silk.backend.database
 import org.jetbrains.exposed.sql.*
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
 import org.jetbrains.exposed.sql.transactions.transaction
+import org.slf4j.LoggerFactory
 import java.util.UUID
 
 /**
  * 联系人数据访问层
  */
 object ContactRepository {
+    private val logger = LoggerFactory.getLogger(ContactRepository::class.java)
     
     /**
      * 获取用户的所有联系人
@@ -62,7 +64,7 @@ object ContactRepository {
             }
             true
         } catch (e: Exception) {
-            println("❌ 添加联系人失败: ${e.message}")
+            logger.error("❌ 添加联系人失败: {}", e.message)
             false
         }
     }
@@ -80,7 +82,7 @@ object ContactRepository {
             }
             true
         } catch (e: Exception) {
-            println("❌ 删除联系人失败: ${e.message}")
+            logger.error("❌ 删除联系人失败: {}", e.message)
             false
         }
     }
@@ -123,7 +125,7 @@ object ContactRepository {
                 )
             }
         } catch (e: Exception) {
-            println("❌ 创建联系人请求失败: ${e.message}")
+            logger.error("❌ 创建联系人请求失败: {}", e.message)
             null
         }
     }
@@ -178,7 +180,7 @@ object ContactRepository {
                 true
             }
         } catch (e: Exception) {
-            println("❌ 处理联系人请求失败: ${e.message}")
+            logger.error("❌ 处理联系人请求失败: {}", e.message)
             false
         }
     }

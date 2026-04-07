@@ -19,6 +19,7 @@ import org.apache.pdfbox.pdmodel.PDDocument
 import org.apache.pdfbox.text.PDFTextStripper
 import com.microsoft.playwright.*
 import kotlinx.coroutines.*
+import org.slf4j.LoggerFactory
 
 /**
  * 网页下载和内容提取工具
@@ -29,6 +30,8 @@ import kotlinx.coroutines.*
  */
 object WebPageDownloader {
     
+    private val logger = LoggerFactory.getLogger(WebPageDownloader::class.java)
+
     // URL 匹配正则表达式
     private val URL_PATTERN = Pattern.compile(
         """https?://[^\s<>"']+""",
@@ -77,7 +80,7 @@ object WebPageDownloader {
             if (playwrightInitialized) return playwrightAvailable
             
             try {
-                println("🎭 正在初始化 Playwright 无头浏览器...")
+                logger.debug("🎭 正在初始化 Playwright 无头浏览器...")
                 playwright = Playwright.create()
                 browser = playwright?.chromium()?.launch(
                     BrowserType.LaunchOptions()
@@ -91,13 +94,12 @@ object WebPageDownloader {
                 )
                 playwrightAvailable = browser != null
                 if (playwrightAvailable) {
-                    println("✅ Playwright 初始化成功")
+                    logger.info("✅ Playwright 初始化成功")
                 } else {
-                    println("⚠️ Playwright 浏览器启动失败")
+                    logger.warn("⚠️ Playwright 浏览器启动失败")
                 }
             } catch (e: Exception) {
-                println("⚠️ Playwright 初始化失败: ${e.message}")
-                println("   将使用简单 HTTP 模式")
+                logger.warn("⚠️ Playwright 初始化失败: {}，将使用简单 HTTP 模式", e.message)
                 playwrightAvailable = false
             }
             playwrightInitialized = true
@@ -113,9 +115,9 @@ object WebPageDownloader {
         try {
             browser?.close()
             playwright?.close()
-            println("🎭 Playwright 已关闭")
+            logger.debug("🎭 Playwright 已关闭")
         } catch (e: Exception) {
-            println("⚠️ 关闭 Playwright 出错: ${e.message}")
+            logger.warn("⚠️ 关闭 Playwright 出错: {}", e.message)
         }
     }
     
@@ -186,7 +188,7 @@ object WebPageDownloader {
      * @return WebPageContent 或 null（如果下载失败）
      */
     fun downloadAndExtract(url: String): WebPageContent? {
-        println("🌐 开始下载: $url")
+        logger.debug("🌐 开始下载: {}", url)
         
         // PDF 文件直接使用 HTTP 下载
         if (isPdfUrl(url)) {
@@ -199,7 +201,7 @@ object WebPageDownloader {
             if (result != null && result.textContent.length > 100) {
                 return result
             }
-            println("⚠️ Playwright 抓取内容不足，尝试简单 HTTP...")
+            logger.warn("⚠️ Playwright 抓取内容不足，尝试简单 HTTP...")
         }
         
         // 降级：使用简单 HTTP
@@ -212,7 +214,7 @@ object WebPageDownloader {
      */
     private fun downloadWithPlaywright(url: String): WebPageContent? {
         return try {
-            println("🎭 使用 Playwright 下载: $url")
+            logger.debug("🎭 使用 Playwright 下载: {}", url)
             
             val context = browser?.newContext(
                 Browser.NewContextOptions()
@@ -247,10 +249,10 @@ object WebPageDownloader {
                 // 处理 Cloudflare 等 JS 挑战
                 // 即使初始响应是 403，也继续等待，因为 JS 可能会自动重定向
                 val statusCode = response?.status() ?: 0
-                println("📊 初始响应状态: $statusCode")
+                logger.debug("📊 初始响应状态: {}", statusCode)
                 
                 if (statusCode == 403 || statusCode == 503) {
-                    println("🔒 检测到安全挑战（可能是 Cloudflare），等待 JS 处理...")
+                    logger.debug("🔒 检测到安全挑战（可能是 Cloudflare），等待 JS 处理...")
                     // 等待 Cloudflare JS 挑战完成
                     try {
                         page.waitForTimeout(8000.0)  // 等待8秒让挑战完成
@@ -258,10 +260,10 @@ object WebPageDownloader {
                         page.waitForLoadState(com.microsoft.playwright.options.LoadState.NETWORKIDLE, 
                             Page.WaitForLoadStateOptions().setTimeout(15000.0))
                     } catch (e: Exception) {
-                        println("⏱️ 等待超时，继续尝试获取内容...")
+                        logger.debug("⏱️ 等待超时，继续尝试获取内容...")
                     }
                 } else if (response == null || (!response.ok() && statusCode != 0)) {
-                    println("⚠️ 页面加载失败: $statusCode")
+                    logger.warn("⚠️ 页面加载失败: {}", statusCode)
                     return null
                 }
                 
@@ -296,7 +298,7 @@ object WebPageDownloader {
                 // 生成文件名
                 val fileName = generateFileName(url, title, "html")
                 
-                println("✅ Playwright 下载成功: $title (${cleanedText.length} 字符)")
+                logger.info("✅ Playwright 下载成功: {} ({} 字符)", title, cleanedText.length)
                 
                 WebPageContent(
                     url = url,
@@ -311,7 +313,7 @@ object WebPageDownloader {
                 context.close()
             }
         } catch (e: Exception) {
-            println("❌ Playwright 下载失败: ${e.message}")
+            logger.error("❌ Playwright 下载失败: {}", e.message)
             null
         }
     }
@@ -321,7 +323,7 @@ object WebPageDownloader {
      */
     private fun downloadWithSimpleHttp(url: String): WebPageContent? {
         return try {
-            println("📡 使用简单 HTTP 下载: $url")
+            logger.debug("📡 使用简单 HTTP 下载: {}", url)
             
             // 配置SSL（允许所有证书，用于开发环境）
             val trustAllCerts = arrayOf<TrustManager>(object : X509TrustManager {
@@ -357,7 +359,7 @@ object WebPageDownloader {
 
             val responseCode = connection.responseCode
             if (responseCode != HttpURLConnection.HTTP_OK) {
-                println("⚠️ HTTP 下载失败，状态码: $responseCode, URL: $url")
+                logger.warn("⚠️ HTTP 下载失败，状态码: {}, URL: {}", responseCode, url)
                 return null
             }
             
@@ -371,7 +373,7 @@ object WebPageDownloader {
             
             // 检查是否是 HTML
             if (!contentType.contains("text/html") && !contentType.contains("text/plain") && !contentType.contains("application/xhtml")) {
-                println("⚠️ 不支持的内容类型: $contentType")
+                logger.warn("⚠️ 不支持的内容类型: {}", contentType)
                 return null
             }
             
@@ -397,7 +399,7 @@ object WebPageDownloader {
             val cleanedText = cleanText(textContent)
             val fileName = generateFileName(url, title, "html")
             
-            println("✅ HTTP 下载成功: $title (${cleanedText.length} 字符)")
+            logger.info("✅ HTTP 下载成功: {} ({} 字符)", title, cleanedText.length)
             
             WebPageContent(
                 url = url,
@@ -408,7 +410,7 @@ object WebPageDownloader {
                 isPdf = false
             )
         } catch (e: Exception) {
-            println("❌ HTTP 下载失败: ${e.message}")
+            logger.error("❌ HTTP 下载失败: {}", e.message)
             null
         }
     }
@@ -418,7 +420,7 @@ object WebPageDownloader {
      */
     private fun downloadPdfWithHttp(url: String): WebPageContent? {
         return try {
-            println("📕 下载 PDF: $url")
+            logger.debug("📕 下载 PDF: {}", url)
             
             // 配置SSL
             val trustAllCerts = arrayOf<TrustManager>(object : X509TrustManager {
@@ -443,13 +445,13 @@ object WebPageDownloader {
             
             val responseCode = connection.responseCode
             if (responseCode != HttpURLConnection.HTTP_OK) {
-                println("⚠️ PDF 下载失败，状态码: $responseCode")
+                logger.warn("⚠️ PDF 下载失败，状态码: {}", responseCode)
                 return null
             }
             
             downloadPdfFromConnection(url, connection)
         } catch (e: Exception) {
-            println("❌ PDF 下载失败: ${e.message}")
+            logger.error("❌ PDF 下载失败: {}", e.message)
             null
         }
     }
@@ -475,7 +477,7 @@ object WebPageDownloader {
             connection.disconnect()
             
             val pdfBytes = buffer.toByteArray()
-            println("📕 PDF 下载完成: ${pdfBytes.size / 1024} KB")
+            logger.debug("📕 PDF 下载完成: {} KB", pdfBytes.size / 1024)
             
             // 使用 PDFBox 提取文本
             val document = PDDocument.load(pdfBytes)
@@ -491,7 +493,7 @@ object WebPageDownloader {
             val cleanedText = cleanText(textContent)
             val fileName = generateFileName(url, title, "pdf")
             
-            println("✅ PDF 提取成功: $title ($pageCount 页, ${cleanedText.length} 字符)")
+            logger.info("✅ PDF 提取成功: {} ({} 页, {} 字符)", title, pageCount, cleanedText.length)
             
             WebPageContent(
                 url = url,
@@ -503,7 +505,7 @@ object WebPageDownloader {
                 pdfBytes = pdfBytes
             )
         } catch (e: Exception) {
-            println("❌ PDF 处理失败: ${e.message}")
+            logger.error("❌ PDF 处理失败: {}", e.message)
             null
         }
     }
@@ -569,7 +571,7 @@ object WebPageDownloader {
         if (content.isPdf && content.pdfBytes != null) {
             // 保存原始 PDF 文件
             file.writeBytes(content.pdfBytes)
-            println("💾 PDF 已保存: ${file.absolutePath}")
+            logger.debug("💾 PDF 已保存: {}", file.absolutePath)
             
             // 同时保存一个包含提取文本的 txt 文件
             val txtFile = File(uploadDir, content.fileName.replace(".pdf", "_text.txt"))
@@ -582,7 +584,7 @@ object WebPageDownloader {
                 
                 ${content.textContent}
             """.trimIndent())
-            println("💾 PDF文本已保存: ${txtFile.absolutePath}")
+            logger.debug("💾 PDF文本已保存: {}", txtFile.absolutePath)
         } else {
             // 创建一个包含元数据的HTML文件
             val htmlWithMeta = """
@@ -606,7 +608,7 @@ object WebPageDownloader {
             """.trimIndent()
             
             file.writeText(htmlWithMeta)
-            println("💾 网页已保存: ${file.absolutePath}")
+            logger.debug("💾 网页已保存: {}", file.absolutePath)
         }
         
         return file

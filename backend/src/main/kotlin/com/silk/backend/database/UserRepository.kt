@@ -2,12 +2,14 @@ package com.silk.backend.database
 
 import org.jetbrains.exposed.sql.*
 import org.jetbrains.exposed.sql.transactions.transaction
+import org.slf4j.LoggerFactory
 import java.util.UUID
 
 /**
  * 用户数据访问层
  */
 object UserRepository {
+    private val logger = LoggerFactory.getLogger(UserRepository::class.java)
     
     /**
      * 创建新用户
@@ -33,7 +35,7 @@ object UserRepository {
                 findUserById(userId)
             }
         } catch (e: Exception) {
-            println("❌ 创建用户失败: ${e.message}")
+            logger.error("❌ 创建用户失败: {}", e.message)
             null
         }
     }
