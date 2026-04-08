@@ -1355,7 +1355,7 @@ fun Application.configureRouting() {
                 logger.error("❌ WebSocket 错误: {}", e.localizedMessage)
             } finally {
                 logger.info("👤 用户断开: {} ({})", userName, userId)
-                groupChatServer.leave(userId, userName)
+                groupChatServer.leave(userId, userName, this)
             }
         }
     }

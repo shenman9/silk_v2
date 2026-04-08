@@ -13,6 +13,7 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.*
 import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CopyOnWriteArrayList
 import com.silk.backend.database.UnreadRepository
 import com.silk.backend.database.GroupRepository
 import com.silk.backend.todos.GroupTodoExtractionService
@@ -58,7 +59,7 @@ class ChatServer(
     private val sessionName: String = "default_room"
 ) {
     private val logger = LoggerFactory.getLogger(ChatServer::class.java)
-    private val connections = ConcurrentHashMap<String, WebSocketSession>()
+    private val connections = ConcurrentHashMap<String, CopyOnWriteArrayList<WebSocketSession>>()
     private val messageHistory = Collections.synchronizedList(mutableListOf<Message>())
     private val historyManager = ChatHistoryManager()
     private val silkAgent = SilkAgent().apply {
@@ -142,7 +143,7 @@ class ChatServer(
             }
         }
 
-        connections[userId] = session
+        connections.getOrPut(userId) { CopyOnWriteArrayList() }.add(session)
         
         // 如果是第一个真实用户加入，让 Silk AI 也加入（静默模式）
         if (!isAgentJoined && userId != SilkAgent.AGENT_ID) {
@@ -194,11 +195,19 @@ class ChatServer(
         logger.info("🤖 Silk AI Agent 已静默加入会话")
     }
     
-    suspend fun leave(userId: String, userName: String) {
-        connections.remove(userId)
-        
-        // 标记成员为离线
-        historyManager.removeMember(sessionName, userId)
+    suspend fun leave(userId: String, userName: String, session: WebSocketSession) {
+        val sessions = connections[userId]
+        if (sessions != null) {
+            sessions.remove(session)
+            if (sessions.isEmpty()) {
+                connections.remove(userId)
+            }
+        }
+
+        // 只有当该用户所有连接都断开后，才标记为离线
+        if (connections[userId] == null) {
+            historyManager.removeMember(sessionName, userId)
+        }
         
         // 不发送离开消息到聊天室（避免产生无意义的历史记录）
         // 用户离开已经通过会话管理记录
@@ -259,15 +268,16 @@ class ChatServer(
         // }
         
         val messageJson = Json.encodeToString(message)
-        
-        connections.values.forEach { session ->
+
+        val sessions = allSessions()
+        sessions.forEach { session ->
             try {
                 session.send(Frame.Text(messageJson))
             } catch (e: Exception) {
                 e.printStackTrace()
             }
         }
-        logger.debug("📤 [broadcast] 消息已广播到 {} 个连接", connections.size)
+        logger.debug("📤 [broadcast] 消息已广播到 {} 个连接", sessions.size)
         
         // ✅ URL检测和网页下载索引
         if (message.type == MessageType.TEXT && !message.isTransient && message.userId != SilkAgent.AGENT_ID) {
@@ -286,9 +296,10 @@ class ChatServer(
             && message.userId != ClaudeCodeManager.CC_AGENT_ID
         ) {
             val groupId = sessionName
-            // 构造单用户发送函数（CC 响应只发给触发用户）
-            val userSession = connections[message.userId]
-            if (userSession != null) {
+            // 构造单用户发送函数（CC 响应只发给触发用户的所有连接）
+            val ccUserId = message.userId
+            val userSessions = connections[ccUserId]
+            if (userSessions != null && userSessions.isNotEmpty()) {
                 val ccBroadcastFn: suspend (Message) -> Unit = { msg ->
                     try {
                         // 非 transient 消息需要持久化到聊天历史（重连后可恢复）
@@ -296,7 +307,16 @@ class ChatServer(
                             messageHistory.add(msg)
                             historyManager.addMessage(sessionName, msg)
                         }
-                        userSession.send(Frame.Text(Json.encodeToString(msg)))
+                        val msgJson = Json.encodeToString(msg)
+                        // 调用时重新读取 session 列表，避免捕获过时引用
+                        val currentSessions = connections[ccUserId] ?: emptyList()
+                        currentSessions.forEach { session ->
+                            try {
+                                session.send(Frame.Text(msgJson))
+                            } catch (e: Exception) {
+                                logger.warn("[CC] 发送消息到某连接失败: {}", e.message)
+                            }
+                        }
                     } catch (e: Exception) {
                         logger.warn("[CC] 发送消息失败: {}", e.message)
                     }
@@ -510,7 +530,7 @@ class ChatServer(
      * 广播系统状态消息（灰色显示）- 公开方法，供其他模块调用
      */
     suspend fun broadcastSystemStatus(status: String) {
-        logger.debug("📢 [状态广播] {} (连接数: {})", status, connections.size)
+        logger.debug("📢 [状态广播] {} (连接数: {})", status, allSessions().size)
         
         val statusMessage = Message(
             id = generateId(),
@@ -524,7 +544,7 @@ class ChatServer(
         )
         
         val messageJson = Json.encodeToString(statusMessage)
-        connections.values.forEach { session ->
+        allSessions().forEach { session ->
             try {
                 session.send(Frame.Text(messageJson))
                 logger.info("   ✅ 状态已发送到一个连接")
@@ -620,7 +640,7 @@ class ChatServer(
                             isIncremental = true   // 增量消息，前端需要拼接
                         )
                         val messageJson = Json.encodeToString(incrementalMessage)
-                        connections.values.forEach { session ->
+                        allSessions().forEach { session ->
                             try {
                                 session.send(Frame.Text(messageJson))
                             } catch (e: Exception) {
@@ -667,8 +687,8 @@ class ChatServer(
                     
                     // 发送最终消息
                     val messageJson = Json.encodeToString(finalMessage)
-                    logger.debug("📤 [智能回答-{}] 发送最终消息到 {} 个连接", callId, connections.size)
-                    connections.values.forEach { session ->
+                    logger.debug("📤 [智能回答-{}] 发送最终消息到 {} 个连接", callId, allSessions().size)
+                    allSessions().forEach { session ->
                         try {
                             session.send(Frame.Text(messageJson))
                             logger.info("   ✅ [智能回答-{}] 已发送到一个连接", callId)
@@ -710,7 +730,7 @@ class ChatServer(
             )
             
             val messageJson = Json.encodeToString(errorMessage)
-            connections.values.forEach { session ->
+            allSessions().forEach { session ->
                 try {
                     session.send(Frame.Text(messageJson))
                 } catch (ex: Exception) {
@@ -817,7 +837,7 @@ class ChatServer(
             }
             
             val messageJson = Json.encodeToString(agentMessage)
-            connections.values.forEach { session ->
+            allSessions().forEach { session ->
                 try {
                     session.send(Frame.Text(messageJson))
                 } catch (e: Exception) {
@@ -913,7 +933,7 @@ class ChatServer(
             
             // 直接发送给所有连接的客户端（临时和普通消息都发送）
             val messageJson = Json.encodeToString(agentMessage)
-            connections.values.forEach { session ->
+            allSessions().forEach { session ->
                 try {
                     session.send(Frame.Text(messageJson))
                 } catch (e: Exception) {
@@ -942,7 +962,7 @@ class ChatServer(
             historyManager.addMessage(sessionName, errorMessage)
             
             val messageJson = Json.encodeToString(errorMessage)
-            connections.values.forEach { session ->
+            allSessions().forEach { session ->
                 try {
                     session.send(Frame.Text(messageJson))
                 } catch (e: Exception) {
@@ -957,6 +977,10 @@ class ChatServer(
             User(id = userId, name = "User_$userId")
         }
     }
+
+    /** 获取所有活跃的 WebSocket 会话（展平多连接） */
+    private fun allSessions(): List<WebSocketSession> =
+        connections.values.flatMap { it }
     
     /**
      * 检查用户是否是群组的Host（医生角色）
@@ -1006,7 +1030,7 @@ class ChatServer(
             
             // 发送给所有客户端
             val messageJson = Json.encodeToString(agentMessage)
-            connections.values.forEach { session ->
+            allSessions().forEach { session ->
                 try {
                     session.send(Frame.Text(messageJson))
                 } catch (e: Exception) {
@@ -1186,7 +1210,7 @@ class ChatServer(
         )
         val notificationJson = Json.encodeToString(recallMessage)
         
-        connections.values.forEach { session ->
+        allSessions().forEach { session ->
             try {
                 session.send(Frame.Text(notificationJson))
             } catch (e: Exception) {

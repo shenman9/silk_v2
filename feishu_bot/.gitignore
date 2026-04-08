@@ -1,0 +1,8 @@
+# 运行时文件
+.bot.pid
+.bot.log
+__pycache__/
+
+# 配置和数据（含敏感信息）
+config/config.yaml
+data/user_bindings.json
