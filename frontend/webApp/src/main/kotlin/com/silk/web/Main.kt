@@ -528,13 +528,6 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
     val transientMessage by chatClient.transientMessage.collectAsState()
     val statusMessages by chatClient.statusMessages.collectAsState()
     val connectionState by chatClient.connectionState.collectAsState()
-    val hasStartedFinalAnswer = transientMessage?.let { msg ->
-        msg.content.isNotBlank() &&
-            msg.currentStep == null &&
-            msg.totalSteps == null &&
-            !isLikelyAgentStatusContent(msg.content)
-    } == true
-    
     // Track if we've sent the default instruction for this session
     var hasSentDefaultInstruction by remember { mutableStateOf(false) }
     
@@ -897,35 +890,6 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                 property("transition", "all 0.2s ease")
             }
         }) {
-            // 显示系统状态消息（灰色）- 放在消息列表前，避免遮挡最终回复
-            if (statusMessages.isNotEmpty() && !hasStartedFinalAnswer) {
-                Div({
-                    style {
-                        backgroundColor(Color("#F5F5F5"))
-                        borderRadius(8.px)
-                        padding(10.px, 14.px)
-                        marginBottom(8.px)
-                        property("border-left", "3px solid #9E9E9E")
-                    }
-                }) {
-                    statusMessages.forEach { status ->
-                        Div({
-                            style {
-                                color(Color("#757575"))
-                                fontSize(13.px)
-                                fontStyle("italic")
-                                marginBottom(4.px)
-                                display(DisplayStyle.Flex)
-                                alignItems(AlignItems.Center)
-                                property("gap", "8px")
-                            }
-                        }) {
-                            Text(status.content)
-                        }
-                    }
-                }
-            }
-
             // 显示所有普通消息
             messages.forEach { message ->
                 MessageItem(
@@ -968,6 +932,35 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         }
                     }
                 )
+            }
+
+            // 显示系统状态消息（灰色）- 放在普通消息之后、临时消息之前
+            if (statusMessages.isNotEmpty()) {
+                Div({
+                    style {
+                        backgroundColor(Color("#F5F5F5"))
+                        borderRadius(8.px)
+                        padding(10.px, 14.px)
+                        marginBottom(8.px)
+                        property("border-left", "3px solid #9E9E9E")
+                    }
+                }) {
+                    statusMessages.forEach { status ->
+                        Div({
+                            style {
+                                color(Color("#757575"))
+                                fontSize(13.px)
+                                fontStyle("italic")
+                                marginBottom(4.px)
+                                display(DisplayStyle.Flex)
+                                alignItems(AlignItems.Center)
+                                property("gap", "8px")
+                            }
+                        }) {
+                            Text(status.content)
+                        }
+                    }
+                }
             }
 
             // 显示临时消息（如果有）
