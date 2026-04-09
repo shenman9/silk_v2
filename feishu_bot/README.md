@@ -23,7 +23,7 @@
    - `im:message` — 读取消息
    - `im:message:send_as_bot` — 以机器人身份发消息
    - `im:message:update` — 更新已发送的消息（流式回复需要）
-5. 订阅事件：`im.message.receive_v1`
+5. 订阅事件：`im.message.receive_v1`、`card.action.trigger`
 6. 发布应用，获取 App ID 和 App Secret
 
 ### 2. 配置
@@ -67,7 +67,7 @@ pip install -r requirements.txt
 
 | 命令 | 说明 |
 |------|------|
-| `绑定 用户名 密码` | 绑定已有的 Silk 账号 |
+| `绑定` | 弹出表单卡片，填写 Silk 用户名和密码进行绑定（密码以密文显示） |
 | `解绑` | 解除绑定 |
 | `帮助` | 查看帮助信息 |
 

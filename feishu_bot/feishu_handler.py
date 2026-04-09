@@ -19,6 +19,10 @@ from lark_oapi.api.im.v1 import (
     PatchMessageRequest,
     PatchMessageRequestBody,
 )
+from lark_oapi.event.callback.model.p2_card_action_trigger import (
+    P2CardActionTrigger,
+    P2CardActionTriggerResponse,
+)
 
 from user_binding import UserBindingManager, SilkBinding
 from silk_client import SilkClient
@@ -78,6 +82,7 @@ class FeishuHandler:
         # 飞书事件处理器
         self._event_handler = lark.EventDispatcherHandler.builder("", "") \
             .register_p2_im_message_receive_v1(self._on_raw_message) \
+            .register_p2_card_action_trigger(self._on_raw_card_action) \
             .build()
 
     # ---- 飞书事件入口 ----
@@ -88,6 +93,21 @@ class FeishuHandler:
             self._handle_message(data)
         except Exception as e:
             logger.error("处理消息异常: %s", e, exc_info=True)
+
+    def _on_raw_card_action(self, data: P2CardActionTrigger) -> P2CardActionTriggerResponse:
+        """收到卡片动作事件（表单提交、按钮点击）"""
+        try:
+            # 使用 open_id 作为用户标识，与消息事件保持一致
+            user_id = data.event.operator.open_id
+            chat_id = data.event.context.open_chat_id
+            action_value = data.event.action.value or {}
+            if data.event.action.form_value:
+                action_value["_form_value"] = data.event.action.form_value
+            logger.info("卡片动作: user=%s, action=%s", user_id, action_value)
+            self._handle_card_action(user_id, chat_id, action_value)
+        except Exception as e:
+            logger.error("处理卡片事件异常: %s", e, exc_info=True)
+        return P2CardActionTriggerResponse()
 
     def _handle_message(self, data) -> None:
         """处理飞书消息"""
@@ -138,19 +158,40 @@ class FeishuHandler:
     # ---- 命令处理 ----
 
     def _handle_bind(self, feishu_id: str, chat_id: str, text: str) -> None:
-        """处理账号绑定命令: 绑定 用户名 密码"""
+        """处理绑定命令：发送表单卡片或直接绑定（向后兼容）"""
         parts = text.split()
-        if len(parts) != 3:
-            self._reply_text(
-                chat_id,
-                f"绑定格式：{self._bind_cmd} 用户名 密码\n"
-                f"例如：{self._bind_cmd} zhangsan mypassword"
-            )
-            return
+        if len(parts) == 3:
+            # 老方式：绑定 用户名 密码（向后兼容）
+            _, login_name, password = parts
+            self._do_bind(feishu_id, chat_id, login_name, password)
+        else:
+            # 新方式：发送卡片表单
+            existing = self.bindings.get(feishu_id)
+            if existing:
+                self._reply_text(
+                    chat_id,
+                    f"你已绑定 Silk 账号 {existing.silk_user_name}。\n"
+                    f"如需更换，请先发送「{self._unbind_cmd}」解绑。"
+                )
+                return
+            card = self._build_bind_card()
+            self._send_card(chat_id, card)
 
-        _, login_name, password = parts
+    def _handle_card_action(self, feishu_id: str, chat_id: str, action_value: dict) -> None:
+        """处理卡片动作（表单提交）"""
+        action = action_value.get("action", "")
 
-        # 检查是否已绑定
+        if action == "bind_form_submit" or "_form_value" in action_value:
+            form = action_value.get("_form_value", {})
+            username = (form.get("silk_username") or "").strip()
+            password = (form.get("silk_password") or "").strip()
+            if not username or not password:
+                self._reply_text(chat_id, "用户名和密码不能为空。")
+                return
+            self._do_bind(feishu_id, chat_id, username, password)
+
+    def _do_bind(self, feishu_id: str, chat_id: str, login_name: str, password: str) -> None:
+        """执行绑定：验证 Silk 账号并建立连接"""
         existing = self.bindings.get(feishu_id)
         if existing:
             self._reply_text(
@@ -160,7 +201,6 @@ class FeishuHandler:
             )
             return
 
-        # 调用 Silk 登录验证
         self._reply_text(chat_id, "正在验证 Silk 账号...")
         user = self.silk.login(login_name, password)
         if not user:
@@ -171,13 +211,11 @@ class FeishuHandler:
         silk_user_name = user["loginName"]
         silk_full_name = user.get("fullName", silk_user_name)
 
-        # 获取或创建专属对话
         group_id = self.silk.start_silk_private_chat(silk_user_id)
         if not group_id:
             self._reply_text(chat_id, "绑定失败：无法创建 Silk 对话空间，请稍后重试。")
             return
 
-        # 保存绑定
         binding = SilkBinding(
             silk_user_id=silk_user_id,
             silk_user_name=silk_user_name,
@@ -185,8 +223,6 @@ class FeishuHandler:
             group_id=group_id,
         )
         self.bindings.bind(feishu_id, binding)
-
-        # 建立 Silk WebSocket 连接
         self._ensure_silk_connection(feishu_id, chat_id, binding)
 
         self._reply_text(
@@ -195,6 +231,48 @@ class FeishuHandler:
             f"Silk 账号: {silk_full_name} ({silk_user_name})\n"
             f"现在可以直接发消息与 Silk AI 对话了。"
         )
+
+    def _build_bind_card(self) -> dict:
+        """构建绑定表单卡片"""
+        return {
+            "config": {"wide_screen_mode": True},
+            "header": {
+                "title": {"tag": "plain_text", "content": "绑定 Silk 账号"},
+                "template": "blue",
+            },
+            "elements": [
+                {
+                    "tag": "form",
+                    "name": "bind_form",
+                    "elements": [
+                        {
+                            "tag": "input",
+                            "name": "silk_username",
+                            "input_type": "text",
+                            "width": "fill",
+                            "label": {"tag": "plain_text", "content": "用户名"},
+                            "placeholder": {"tag": "plain_text", "content": "输入 Silk 用户名"},
+                        },
+                        {
+                            "tag": "input",
+                            "name": "silk_password",
+                            "input_type": "password",
+                            "width": "fill",
+                            "label": {"tag": "plain_text", "content": "密码"},
+                            "placeholder": {"tag": "plain_text", "content": "输入 Silk 密码"},
+                        },
+                        {
+                            "tag": "button",
+                            "name": "submit_bind",
+                            "text": {"tag": "plain_text", "content": "绑定"},
+                            "type": "primary",
+                            "form_action_type": "submit",
+                            "value": {"action": "bind_form_submit"},
+                        },
+                    ],
+                },
+            ],
+        }
 
     def _handle_unbind(self, feishu_id: str, chat_id: str) -> None:
         """处理解绑命令"""
@@ -212,7 +290,7 @@ class FeishuHandler:
         """发送帮助信息"""
         help_text = (
             f"**Silk 飞书机器人**\n\n"
-            f"**绑定账号**: 发送 `{self._bind_cmd} 用户名 密码`\n"
+            f"**绑定账号**: 发送 `{self._bind_cmd}`，在弹出的表单中填写用户名和密码\n"
             f"**解绑账号**: 发送 `{self._unbind_cmd}`\n"
             f"**查看帮助**: 发送 `{self._help_cmd}`\n\n"
             f"绑定后，直接发送文字即可与 Silk AI 对话。\n"
@@ -229,7 +307,7 @@ class FeishuHandler:
         if not binding:
             self._reply_text(
                 chat_id,
-                f"请先绑定 Silk 账号：{self._bind_cmd} 用户名 密码\n"
+                f"请先绑定 Silk 账号：发送「{self._bind_cmd}」开始绑定\n"
                 f"发送「{self._help_cmd}」查看更多。"
             )
             return
@@ -254,7 +332,7 @@ class FeishuHandler:
         if not binding:
             self._reply_text(
                 chat_id,
-                f"请先绑定 Silk 账号：{self._bind_cmd} 用户名 密码"
+                f"请先绑定 Silk 账号：发送「{self._bind_cmd}」开始绑定"
             )
             return
 
