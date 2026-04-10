@@ -183,9 +183,10 @@ export class ChatStore {
         if (message.content.startsWith('CLEAR_STATUS')) {
           this._statusMessages = [];
         } else {
-          const nextStatusMessages: Message[] = this._statusMessages.concat([message]);
+          // 替换相同 ID 的状态消息（工具结果覆盖工具开始，空闲状态原地刷新）
+          const withoutExisting: Message[] = this._statusMessages.filter(msg => msg.id !== message.id);
+          const nextStatusMessages: Message[] = withoutExisting.concat([message]);
           if (nextStatusMessages.length > 10) {
-            // 取最后 10 条消息
             const startIndex = nextStatusMessages.length - 10;
             const result: Message[] = [];
             for (let i = startIndex; i < nextStatusMessages.length; i++) {

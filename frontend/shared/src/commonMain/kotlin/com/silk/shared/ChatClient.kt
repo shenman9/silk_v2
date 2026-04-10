@@ -113,9 +113,16 @@ class ChatClient(
                         log("🧹 [ChatClient] 清除状态消息")
                         _statusMessages.value = emptyList()
                     } else {
-                        log("🔄 [ChatClient] Agent 状态消息: ${message.content}")
-                        // 添加到状态列表，保留最近10条
-                        _statusMessages.value = (_statusMessages.value + message).takeLast(10)
+                        log("🔄 [ChatClient] Agent 状态消息: ${message.content.take(40)}")
+                        // 替换相同 ID 的状态消息（工具结果覆盖工具开始，空闲状态原地刷新）
+                        val existingIndex = _statusMessages.value.indexOfFirst { it.id == message.id }
+                        val updated = if (existingIndex >= 0) {
+                            // 原地替换，保持位置不变
+                            _statusMessages.value.toMutableList().apply { set(existingIndex, message) }
+                        } else {
+                            (_statusMessages.value + message).takeLast(10)
+                        }
+                        _statusMessages.value = updated
                     }
                 }
                 // 增量临时消息：拼接到已有内容尾部

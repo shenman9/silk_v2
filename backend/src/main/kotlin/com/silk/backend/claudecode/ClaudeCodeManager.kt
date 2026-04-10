@@ -324,9 +324,12 @@ object ClaudeCodeManager {
                         logger.info("[CC] onStreamText: {}字符", accumulated.length)
                         broadcastFn(streamingMessage(accumulated))
                     },
-                    onToolLog = { log ->
+                    onToolLog = { log, stableId ->
                         logger.info("[CC] onToolLog: {}", log.take(80))
-                        broadcastFn(statusMessage(log))
+                        broadcastFn(statusMessage(log, stableId))
+                    },
+                    onStatusUpdate = { status ->
+                        broadcastFn(statusMessage(status, "cc_running_status"))
                     },
                     onComplete = { fullText, meta ->
                         val wallClockMs = System.currentTimeMillis() - startTime
@@ -402,8 +405,8 @@ object ClaudeCodeManager {
         isTransient = false,
     )
 
-    private fun statusMessage(content: String) = Message(
-        id = generateId(),
+    private fun statusMessage(content: String, stableId: String? = null) = Message(
+        id = stableId ?: generateId(),
         userId = CC_AGENT_ID,
         userName = CC_AGENT_NAME,
         content = content,
