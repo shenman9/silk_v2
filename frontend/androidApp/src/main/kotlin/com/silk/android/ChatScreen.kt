@@ -4121,7 +4121,7 @@ suspend fun uploadFile(
     try {
         val boundary = "===" + System.currentTimeMillis() + "==="
         val url = URL("${BackendUrlHolder.getBaseUrl()}/api/files/upload")
-        val connection = url.openConnection() as HttpURLConnection
+        val connection = AndroidHttpCompat.openConnection(url)
         
         connection.requestMethod = "POST"
         connection.doOutput = true
@@ -4196,7 +4196,7 @@ data class FilesAndUrls(
 suspend fun loadGroupFilesAndUrls(groupId: String): FilesAndUrls = withContext(Dispatchers.IO) {
     try {
         val url = URL("${BackendUrlHolder.getBaseUrl()}/api/files/list/$groupId")
-        val connection = url.openConnection() as HttpURLConnection
+        val connection = AndroidHttpCompat.openConnection(url)
         connection.requestMethod = "GET"
         connection.connectTimeout = 10000
         connection.readTimeout = 10000

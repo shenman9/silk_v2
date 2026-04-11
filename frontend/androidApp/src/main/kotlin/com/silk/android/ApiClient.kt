@@ -492,7 +492,7 @@ object ApiClient {
     
     private fun post(endpoint: String, jsonBody: String): String {
         val url = URL("$baseUrl$endpoint")
-        val connection = url.openConnection() as HttpURLConnection
+        val connection = AndroidHttpCompat.openConnection(url)
         
         return try {
             connection.apply {
@@ -515,7 +515,7 @@ object ApiClient {
     
     private fun put(endpoint: String, jsonBody: String): String {
         val url = URL("$baseUrl$endpoint")
-        val connection = url.openConnection() as HttpURLConnection
+        val connection = AndroidHttpCompat.openConnection(url)
         
         return try {
             connection.apply {
@@ -538,7 +538,7 @@ object ApiClient {
     
     private fun get(endpoint: String): String {
         val url = URL("$baseUrl$endpoint")
-        val connection = url.openConnection() as HttpURLConnection
+        val connection = AndroidHttpCompat.openConnection(url)
         
         return try {
             connection.apply {

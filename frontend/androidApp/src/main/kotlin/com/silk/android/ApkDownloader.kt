@@ -42,7 +42,7 @@ object ApkDownloader {
             onProgress(DownloadState.Downloading(0, "正在连接服务器..."))
             
             val url = URL(apkUrl)
-            val connection = url.openConnection() as HttpURLConnection
+            val connection = AndroidHttpCompat.openConnection(url)
             connection.requestMethod = "GET"
             connection.connectTimeout = 30000
             connection.readTimeout = 60000
