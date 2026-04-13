@@ -12,7 +12,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import com.silk.shared.i18n.*
+import com.silk.shared.i18n.Strings
+import com.silk.shared.i18n.getStrings
 import com.silk.shared.models.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -44,8 +45,9 @@ fun GroupListScreen(appState: AppState) {
                     val response = withContext(Dispatchers.IO) {
                         ApiClient.getUserSettings(user.id)
                     }
-                    if (response.success && response.settings != null) {
-                        userLanguage = response.settings.language
+                    val settings = response.settings
+                    if (response.success && settings != null) {
+                        userLanguage = settings.language
                     }
                 } catch (e: Exception) {
                     println("Failed to load user settings: $e")
@@ -481,4 +483,3 @@ fun JoinGroupDialog(
         }
     )
 }
-

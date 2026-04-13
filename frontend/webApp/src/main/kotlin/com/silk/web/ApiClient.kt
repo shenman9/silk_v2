@@ -124,27 +124,6 @@ data class AddMemberResponse(
     val message: String
 )
 
-@Serializable
-data class LeaveGroupResponse(
-    val success: Boolean,
-    val message: String,
-    val groupDeleted: Boolean = false
-)
-
-@Serializable
-data class DeleteGroupResponse(
-    val success: Boolean,
-    val message: String
-)
-
-// ==================== 通用响应模型 ====================
-
-@Serializable
-data class SimpleResponse(
-    val success: Boolean,
-    val message: String
-)
-
 object ApiClient {
     private val BASE_URL: String
         get() {
@@ -392,14 +371,14 @@ object ApiClient {
     /**
      * 删除群组（仅群主可操作）
      */
-    suspend fun deleteGroup(groupId: String, userId: String): DeleteGroupResponse {
+    suspend fun deleteGroup(groupId: String, userId: String): SimpleResponse {
         return try {
             val body = """{"userId":"$userId"}"""
             val response = delete("/groups/$groupId", body)
             jsonParser.decodeFromString(response)
         } catch (e: Exception) {
             console.log("删除群组失败:", e)
-            DeleteGroupResponse(false, "网络错误")
+            SimpleResponse(false, "网络错误")
         }
     }
     // ==================== 用户设置相关 API ====================
@@ -521,4 +500,3 @@ object ApiClient {
         return response.text().await()
     }
 }
-

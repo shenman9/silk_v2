@@ -12,8 +12,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import com.silk.shared.i18n.*
+import com.silk.shared.i18n.getStrings
 import com.silk.shared.models.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -42,10 +41,11 @@ fun SettingsScreen(appState: AppState) {
                 val response = withContext(Dispatchers.IO) {
                     ApiClient.getUserSettings(user.id)
                 }
-                if (response.success && response.settings != null) {
-                    settings = response.settings
-                    selectedLanguage = response.settings.language
-                    defaultInstruction = response.settings.defaultAgentInstruction
+                val loadedSettings = response.settings
+                if (response.success && loadedSettings != null) {
+                    settings = loadedSettings
+                    selectedLanguage = loadedSettings.language
+                    defaultInstruction = loadedSettings.defaultAgentInstruction
                 } else {
                     // Use defaults
                     selectedLanguage = Language.CHINESE

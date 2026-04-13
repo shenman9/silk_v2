@@ -124,21 +124,6 @@ data class AddMemberResponse(
     val message: String
 )
 
-@Serializable
-data class LeaveGroupResponse(
-    val success: Boolean,
-    val message: String,
-    val groupDeleted: Boolean = false
-)
-
-// ==================== 通用响应模型 ====================
-
-@Serializable
-data class SimpleResponse(
-    val success: Boolean,
-    val message: String
-)
-
 // ==================== 版本检查相关数据模型 ====================
 
 @Serializable
@@ -553,4 +538,3 @@ object ApiClient {
         }
     }
 }
-

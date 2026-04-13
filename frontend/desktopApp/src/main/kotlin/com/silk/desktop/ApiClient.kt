@@ -173,14 +173,14 @@ object ApiClient {
     /**
      * 退出群组
      */
-    fun leaveGroup(groupId: String, userId: String): SimpleResponse {
+    fun leaveGroup(groupId: String, userId: String): LeaveGroupResponse {
         return try {
             val body = """{"userId":"$userId"}"""
             val response = post("/groups/$groupId/leave", body)
-            json.decodeFromString(SimpleResponse.serializer(), response)
+            json.decodeFromString(LeaveGroupResponse.serializer(), response)
         } catch (e: Exception) {
             println("❌ 退出群组失败: ${e.message}")
-            SimpleResponse(false, "网络错误: ${e.message}")
+            LeaveGroupResponse(false, "网络错误: ${e.message}")
         }
     }
     
@@ -190,7 +190,7 @@ object ApiClient {
     fun deleteGroup(groupId: String, userId: String): SimpleResponse {
         return try {
             val body = """{"userId":"$userId"}"""
-            val response = post("/groups/$groupId/delete", body)
+            val response = delete("/groups/$groupId", body)
             json.decodeFromString(SimpleResponse.serializer(), response)
         } catch (e: Exception) {
             println("❌ 删除群组失败: ${e.message}")
@@ -283,6 +283,34 @@ object ApiClient {
             connection.disconnect()
         }
     }
+
+    /**
+     * HTTP DELETE请求
+     */
+    private fun delete(endpoint: String, jsonBody: String): String {
+        val url = URL("$BASE_URL$endpoint")
+        val connection = url.openConnection() as HttpURLConnection
+
+        return try {
+            connection.requestMethod = "DELETE"
+            connection.setRequestProperty("Content-Type", "application/json")
+            connection.doOutput = true
+
+            connection.outputStream.use { os ->
+                os.write(jsonBody.toByteArray())
+            }
+
+            val responseCode = connection.responseCode
+            if (responseCode == HttpURLConnection.HTTP_OK) {
+                connection.inputStream.bufferedReader().use { it.readText() }
+            } else {
+                connection.errorStream?.bufferedReader()?.use { it.readText() }
+                    ?: """{"success":false,"message":"HTTP Error: $responseCode"}"""
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
     
     /**
      * HTTP GET请求
@@ -307,4 +335,3 @@ object ApiClient {
         }
     }
 }
-
