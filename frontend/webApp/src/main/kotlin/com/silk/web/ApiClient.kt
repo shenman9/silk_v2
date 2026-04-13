@@ -145,6 +145,14 @@ data class SimpleResponse(
     val message: String
 )
 
+@Serializable
+data class ExportMarkdownResponse(
+    val success: Boolean,
+    val message: String,
+    val fileName: String = "",
+    val markdown: String = ""
+)
+
 object ApiClient {
     private val BASE_URL: String
         get() {
@@ -162,6 +170,7 @@ object ApiClient {
             }
         }
     private val jsonParser = Json { ignoreUnknownKeys = true }
+
     
     suspend fun register(
         loginName: String,
@@ -479,6 +488,16 @@ object ApiClient {
         } catch (e: Exception) {
             console.log("撤回消息失败:", e)
             SimpleResponse(false, "网络错误")
+        }
+    }
+
+    suspend fun exportGroupMarkdown(groupId: String, userId: String): ExportMarkdownResponse {
+        return try {
+            val response = get("/groups/$groupId?export=obsidian_markdown&userId=$userId")
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            console.log("导出聊天记录失败:", e)
+            ExportMarkdownResponse(false, "网络错误: ${e.message}")
         }
     }
     

@@ -10,6 +10,8 @@ import com.silk.shared.models.Message
 import com.silk.shared.models.MessageType
 import com.silk.shared.models.UserSettings
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.await
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.browser.window
 import kotlinx.browser.document
 import kotlin.js.Date
@@ -82,6 +84,21 @@ private fun backendWsOrigin(): String {
         window.location.host
     }
     return "$wsProtocol//$host"
+}
+
+private fun parseFileNameFromContentDisposition(contentDisposition: String?): String? {
+    if (contentDisposition.isNullOrBlank()) return null
+    val fileNameStar = Regex("filename\\*=UTF-8''([^;]+)", RegexOption.IGNORE_CASE)
+        .find(contentDisposition)
+        ?.groupValues
+        ?.getOrNull(1)
+    if (!fileNameStar.isNullOrBlank()) {
+        return fileNameStar.replace("%20", " ")
+    }
+    return Regex("filename=\"?([^\";]+)\"?", RegexOption.IGNORE_CASE)
+        .find(contentDisposition)
+        ?.groupValues
+        ?.getOrNull(1)
 }
 
 fun main() {
@@ -761,6 +778,8 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
     var messageText by remember { mutableStateOf("") }
     var showInvitationDialog by remember { mutableStateOf(false) }
     var isUploading by remember { mutableStateOf(false) }
+    var isExportingMarkdown by remember { mutableStateOf(false) }
+    var exportMarkdownHint by remember { mutableStateOf<String?>(null) }
     var showFolderExplorer by remember { mutableStateOf(false) }
     var folderFiles by remember { mutableStateOf<List<FileInfo>>(emptyList()) }
     var isLoadingFiles by remember { mutableStateOf(false) }
@@ -988,6 +1007,76 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                     }
                 }) {
                     Text("📁")
+                }
+
+                // 📝 导出按钮 - 导出聊天为 Obsidian Markdown
+                Button({
+                    style {
+                        padding(10.px, 14.px)
+                        backgroundColor(Color(if (isExportingMarkdown) "rgba(255,255,255,0.35)" else "rgba(255,255,255,0.2)"))
+                        color(Color.white)
+                        border { width(0.px) }
+                        borderRadius(8.px)
+                        property("cursor", if (isExportingMarkdown) "not-allowed" else "pointer")
+                        fontSize(16.px)
+                        property("backdrop-filter", "blur(4px)")
+                        property("transition", "all 0.2s ease")
+                        property("opacity", if (isExportingMarkdown) "0.85" else "1")
+                    }
+                    onClick {
+                        if (isExportingMarkdown) return@onClick
+                        scope.launch {
+                            isExportingMarkdown = true
+                            exportMarkdownHint = "正在导出..."
+                            try {
+                                val result = ApiClient.exportGroupMarkdown(group.id, user.id)
+                                if (!result.success) {
+                                    exportMarkdownHint = "导出失败：${result.message}"
+                                    window.alert("导出失败：${result.message}")
+                                    return@launch
+                                }
+                                val blob = org.w3c.files.Blob(
+                                    arrayOf(result.markdown),
+                                    org.w3c.files.BlobPropertyBag(type = "text/markdown;charset=utf-8")
+                                )
+                                val windowJs = js("window")
+                                val objectUrl = windowJs.URL.createObjectURL(blob) as String
+                                val anchor = document.createElement("a") as HTMLAnchorElement
+                                anchor.style.display = "none"
+                                anchor.href = objectUrl
+                                anchor.download = result.fileName.ifBlank { "silk_group_${group.id}.md" }
+                                document.body?.appendChild(anchor)
+                                anchor.click()
+                                document.body?.removeChild(anchor)
+                                windowJs.URL.revokeObjectURL(objectUrl)
+                                console.log("✅ 聊天记录已导出:", result.fileName)
+                                exportMarkdownHint = "导出成功：${result.fileName}"
+                            } catch (e: Exception) {
+                                console.error("❌ 导出聊天异常:", e)
+                                exportMarkdownHint = "导出异常: ${e.message}"
+                                window.alert("导出失败: ${e.message}")
+                            } finally {
+                                isExportingMarkdown = false
+                            }
+                        }
+                    }
+                }) {
+                    Text(if (isExportingMarkdown) "导出中..." else "📝")
+                }
+                exportMarkdownHint?.let { hint ->
+                    Span({
+                        style {
+                            fontSize(11.px)
+                            color(Color.white)
+                            property("max-width", "260px")
+                            property("overflow", "hidden")
+                            property("text-overflow", "ellipsis")
+                            property("white-space", "nowrap")
+                        }
+                        title(hint)
+                    }) {
+                        Text(hint)
+                    }
                 }
                 
                 // 邀请按钮

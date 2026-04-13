@@ -5,14 +5,18 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-WEAVIATE_BIN="$SCRIPT_DIR/weaviate"
+WEAVIATE_BIN="$SCRIPT_DIR/bin/weaviate"
 DATA_DIR="$SCRIPT_DIR/weaviate_data"
 LOG_FILE="$SCRIPT_DIR/weaviate.log"
 PID_FILE="$SCRIPT_DIR/weaviate.pid"
 
-# Weaviate 端口
-WEAVIATE_PORT=8090
-WEAVIATE_GRPC_PORT=50051
+# 从 .env 读取端口，默认 16701
+SILK_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+if [ -f "$SILK_DIR/.env" ]; then
+    source <(grep -E '^(WEAVIATE_HTTP_PORT|WEAVIATE_GRPC_PORT|WEAVIATE_API_KEY)=' "$SILK_DIR/.env")
+fi
+WEAVIATE_PORT=${WEAVIATE_HTTP_PORT:-16701}
+WEAVIATE_GRPC_PORT=${WEAVIATE_GRPC_PORT:-50051}
 
 # 颜色输出
 RED='\033[0;31m'
