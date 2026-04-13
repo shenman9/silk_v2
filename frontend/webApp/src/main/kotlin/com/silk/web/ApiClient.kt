@@ -403,7 +403,7 @@ object ApiClient {
         }
     }
     // ==================== 用户设置相关 API ====================
-    
+
     /**
      * 获取用户设置
      */
@@ -416,7 +416,7 @@ object ApiClient {
             UserSettingsResponse(false, "网络错误")
         }
     }
-    
+
     /**
      * 更新用户设置
      */
@@ -429,6 +429,47 @@ object ApiClient {
         } catch (e: Exception) {
             console.log("更新用户设置失败:", e)
             UserSettingsResponse(false, "网络错误")
+        }
+    }
+
+    // ==================== Claude Code 设置相关 API ====================
+
+    /**
+     * 获取 CC 设置（token + bridge 状态）
+     */
+    suspend fun getCcSettings(userId: String): CcSettingsResponse {
+        return try {
+            val response = get("/users/$userId/cc-settings")
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            console.log("获取CC设置失败:", e)
+            CcSettingsResponse(false, "网络错误")
+        }
+    }
+
+    /**
+     * 生成/重新生成 Bridge Token
+     */
+    suspend fun generateBridgeToken(userId: String): CcSettingsResponse {
+        return try {
+            val response = post("/users/$userId/cc-settings/generate-token", "{}")
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            console.log("生成Bridge Token失败:", e)
+            CcSettingsResponse(false, "网络错误")
+        }
+    }
+
+    /**
+     * 查询 Bridge 在线状态
+     */
+    suspend fun getBridgeStatus(userId: String): CcSettingsResponse {
+        return try {
+            val response = get("/users/$userId/cc-settings/bridge-status")
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            console.log("查询Bridge状态失败:", e)
+            CcSettingsResponse(false, "网络错误")
         }
     }
     

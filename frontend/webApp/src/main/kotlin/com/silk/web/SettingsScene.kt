@@ -13,15 +13,21 @@ import org.jetbrains.compose.web.dom.*
 fun SettingsScene(appState: WebAppState) {
     val scope = rememberCoroutineScope()
     val user = appState.currentUser ?: return
-    
+
     var settings by remember { mutableStateOf<UserSettings?>(null) }
     var isLoading by remember { mutableStateOf(true) }
     var isSaving by remember { mutableStateOf(false) }
     var saveMessage by remember { mutableStateOf<String?>(null) }
-    
+
     // Local state for editing
     var selectedLanguage by remember { mutableStateOf<Language>(Language.CHINESE) }
     var defaultInstruction by remember { mutableStateOf("") }
+
+    // CC settings state
+    var ccBridgeToken by remember { mutableStateOf<String?>(null) }
+    var ccBridgeConnected by remember { mutableStateOf(false) }
+    var ccTokenVisible by remember { mutableStateOf(false) }
+    var ccIsGenerating by remember { mutableStateOf(false) }
     
     // Load settings on mount
     LaunchedEffect(Unit) {
@@ -41,6 +47,12 @@ fun SettingsScene(appState: WebAppState) {
                     console.log("No settings found, using default CHINESE")
                     selectedLanguage = Language.CHINESE
                     defaultInstruction = "You are a helpful technical research assistant. "
+                }
+                // Load CC settings
+                val ccResponse = ApiClient.getCcSettings(user.id)
+                if (ccResponse.success) {
+                    ccBridgeToken = ccResponse.ccBridgeToken
+                    ccBridgeConnected = ccResponse.bridgeConnected
                 }
             } catch (e: Exception) {
                 console.error("加载设置失败:", e)
@@ -211,7 +223,7 @@ fun SettingsScene(appState: WebAppState) {
                             Text(strings.defaultAgentInstructionLabel)
                         }
                     }
-                    
+
                     TextArea {
                         style {
                             width(100.percent)
@@ -227,6 +239,225 @@ fun SettingsScene(appState: WebAppState) {
                         }
                         value(defaultInstruction)
                         onInput { event -> defaultInstruction = event.value }
+                    }
+                }
+
+                // Claude Code settings section
+                Div({
+                    style {
+                        marginBottom(32.px)
+                        padding(20.px)
+                        border {
+                            width(1.px)
+                            style(LineStyle.Solid)
+                            color(Color(SilkColors.border))
+                        }
+                        borderRadius(12.px)
+                        backgroundColor(Color(SilkColors.surfaceElevated))
+                    }
+                }) {
+                    // Section title
+                    Span({
+                        style {
+                            display(DisplayStyle.Block)
+                            marginBottom(16.px)
+                            color(Color(SilkColors.textPrimary))
+                            fontSize(16.px)
+                            property("font-weight", "600")
+                        }
+                    }) {
+                        Text(strings.ccSettingsTitle)
+                    }
+
+                    if (ccBridgeToken == null) {
+                        // No token generated yet
+                        Div({ style { marginBottom(12.px) } }) {
+                            Span({
+                                style {
+                                    color(Color(SilkColors.textSecondary))
+                                    fontSize(13.px)
+                                }
+                            }) {
+                                Text(strings.ccBridgeNotConfigured)
+                            }
+                        }
+                        Button({
+                            style {
+                                padding(10.px, 20.px)
+                                background("linear-gradient(135deg, ${SilkColors.primary} 0%, ${SilkColors.primaryDark} 100%)")
+                                color(Color.white)
+                                border { width(0.px) }
+                                borderRadius(8.px)
+                                property("cursor", if (ccIsGenerating) "not-allowed" else "pointer")
+                                property("opacity", if (ccIsGenerating) "0.6" else "1")
+                                fontSize(14.px)
+                                property("font-weight", "500")
+                            }
+                            onClick {
+                                if (!ccIsGenerating) {
+                                    scope.launch {
+                                        ccIsGenerating = true
+                                        try {
+                                            val resp = ApiClient.generateBridgeToken(user.id)
+                                            if (resp.success) {
+                                                ccBridgeToken = resp.ccBridgeToken
+                                                ccBridgeConnected = resp.bridgeConnected
+                                            }
+                                        } finally {
+                                            ccIsGenerating = false
+                                        }
+                                    }
+                                }
+                            }
+                        }) {
+                            Text(if (ccIsGenerating) "..." else strings.ccGenerateToken)
+                        }
+                    } else {
+                        // Token exists — show token + status
+                        // Bridge status indicator
+                        Div({
+                            style {
+                                display(DisplayStyle.Flex)
+                                alignItems(AlignItems.Center)
+                                gap(8.px)
+                                marginBottom(16.px)
+                            }
+                        }) {
+                            // Status dot
+                            Span({
+                                style {
+                                    width(10.px)
+                                    height(10.px)
+                                    borderRadius(50.percent)
+                                    backgroundColor(if (ccBridgeConnected) Color("#4CAF50") else Color("#9E9E9E"))
+                                    display(DisplayStyle.InlineBlock)
+                                }
+                            }) {}
+                            Span({
+                                style {
+                                    fontSize(14.px)
+                                    color(if (ccBridgeConnected) Color("#4CAF50") else Color(SilkColors.textSecondary))
+                                    property("font-weight", "500")
+                                }
+                            }) {
+                                Text(if (ccBridgeConnected) strings.ccBridgeConnected else strings.ccBridgeDisconnected)
+                            }
+                        }
+
+                        // Token display
+                        Div({ style { marginBottom(12.px) } }) {
+                            Span({
+                                style {
+                                    display(DisplayStyle.Block)
+                                    marginBottom(8.px)
+                                    color(Color(SilkColors.textSecondary))
+                                    fontSize(13.px)
+                                }
+                            }) {
+                                Text(strings.ccBridgeTokenLabel)
+                            }
+                            Div({
+                                style {
+                                    display(DisplayStyle.Flex)
+                                    alignItems(AlignItems.Center)
+                                    gap(8.px)
+                                }
+                            }) {
+                                // Token value (masked or visible)
+                                Span({
+                                    style {
+                                        fontFamily("monospace")
+                                        fontSize(13.px)
+                                        padding(8.px, 12.px)
+                                        backgroundColor(Color("#f5f5f5"))
+                                        borderRadius(6.px)
+                                        color(Color(SilkColors.textPrimary))
+                                        property("cursor", "pointer")
+                                        property("user-select", "all")
+                                    }
+                                    onClick { ccTokenVisible = !ccTokenVisible }
+                                }) {
+                                    Text(if (ccTokenVisible) (ccBridgeToken ?: "") else "••••••••••••••••")
+                                }
+                                // Copy button
+                                Button({
+                                    style {
+                                        padding(6.px, 12.px)
+                                        backgroundColor(Color(SilkColors.secondary))
+                                        color(Color(SilkColors.textPrimary))
+                                        border { width(0.px) }
+                                        borderRadius(6.px)
+                                        property("cursor", "pointer")
+                                        fontSize(12.px)
+                                    }
+                                    onClick {
+                                        ccBridgeToken?.let { token ->
+                                            kotlinx.browser.window.navigator.clipboard.writeText(token)
+                                            saveMessage = strings.ccTokenCopied
+                                        }
+                                    }
+                                }) {
+                                    Text(strings.ccCopyToken)
+                                }
+                            }
+                        }
+
+                        // Regenerate button
+                        Div({ style { marginBottom(12.px) } }) {
+                            Button({
+                                style {
+                                    padding(8.px, 16.px)
+                                    backgroundColor(Color("#FFF3E0"))
+                                    color(Color("#E65100"))
+                                    border {
+                                        width(1.px)
+                                        style(LineStyle.Solid)
+                                        color(Color("#FFB74D"))
+                                    }
+                                    borderRadius(6.px)
+                                    property("cursor", if (ccIsGenerating) "not-allowed" else "pointer")
+                                    property("opacity", if (ccIsGenerating) "0.6" else "1")
+                                    fontSize(13.px)
+                                }
+                                onClick {
+                                    if (!ccIsGenerating) {
+                                        val confirmed = kotlinx.browser.window.confirm(strings.ccRegenerateConfirm)
+                                        if (confirmed) {
+                                            scope.launch {
+                                                ccIsGenerating = true
+                                                try {
+                                                    val resp = ApiClient.generateBridgeToken(user.id)
+                                                    if (resp.success) {
+                                                        ccBridgeToken = resp.ccBridgeToken
+                                                        ccBridgeConnected = resp.bridgeConnected
+                                                        ccTokenVisible = true
+                                                    }
+                                                } finally {
+                                                    ccIsGenerating = false
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }) {
+                                Text(if (ccIsGenerating) "..." else strings.ccRegenerateToken)
+                            }
+                        }
+
+                        // Help text
+                        Div({
+                            style {
+                                padding(12.px)
+                                backgroundColor(Color("#F5F5F5"))
+                                borderRadius(8.px)
+                                fontSize(12.px)
+                                color(Color(SilkColors.textSecondary))
+                                fontFamily("monospace")
+                                property("white-space", "pre-wrap")
+                            }
+                        }) {
+                            Text(strings.ccBridgeHelp)
+                        }
                     }
                 }
                 

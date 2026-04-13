@@ -126,6 +126,19 @@ interface Strings {
     // Silk AI chat
     val chatWithSilk: String  // "Chat with Silk"
     val silkChatInputPlaceholder: String  // "Type message to Silk..."
+
+    // Claude Code settings
+    val ccSettingsTitle: String  // "Claude Code"
+    val ccBridgeTokenLabel: String  // "Bridge Token"
+    val ccGenerateToken: String  // "Generate Token"
+    val ccRegenerateToken: String  // "Regenerate Token"
+    val ccBridgeConnected: String  // "Connected"
+    val ccBridgeDisconnected: String  // "Not Connected"
+    val ccCopyToken: String  // "Copy"
+    val ccBridgeNotConfigured: String  // "Not configured"
+    val ccBridgeHelp: String  // Help text
+    val ccRegenerateConfirm: String  // "Regenerating will disconnect the current bridge. Continue?"
+    val ccTokenCopied: String  // "Token copied"
 }
 
 /**

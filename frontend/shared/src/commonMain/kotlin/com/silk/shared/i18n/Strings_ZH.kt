@@ -121,4 +121,17 @@ object Strings_ZH : Strings {
     // Silk AI chat
     override val chatWithSilk = "与 Silk 对话"
     override val silkChatInputPlaceholder = "直接输入消息与 Silk 对话... (Enter发送)"
+
+    // Claude Code settings
+    override val ccSettingsTitle = "Claude Code"
+    override val ccBridgeTokenLabel = "Bridge Token"
+    override val ccGenerateToken = "生成 Token"
+    override val ccRegenerateToken = "重新生成 Token"
+    override val ccBridgeConnected = "已连接"
+    override val ccBridgeDisconnected = "未连接"
+    override val ccCopyToken = "复制"
+    override val ccBridgeNotConfigured = "尚未生成 Token。生成 Token 后启动 Bridge Agent 即可连接。"
+    override val ccBridgeHelp = "安装: pip install websockets\n运行: python bridge.py --server <服务器地址:端口> --token <你的Token>"
+    override val ccRegenerateConfirm = "重新生成会断开当前 Bridge 连接，确认继续？"
+    override val ccTokenCopied = "Token 已复制到剪贴板"
 }

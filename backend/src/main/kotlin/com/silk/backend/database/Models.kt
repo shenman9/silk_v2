@@ -453,7 +453,8 @@ enum class Language {
 @Serializable
 data class UserSettings(
     val language: Language = Language.CHINESE,
-    val defaultAgentInstruction: String = "You are a helpful technical research assistant. "
+    val defaultAgentInstruction: String = "You are a helpful technical research assistant. ",
+    val ccBridgeToken: String? = null,
 )
 
 /**
@@ -474,6 +475,17 @@ data class UserSettingsResponse(
     val success: Boolean,
     val message: String,
     val settings: UserSettings? = null
+)
+
+/**
+ * CC 设置响应
+ */
+@Serializable
+data class CcSettingsResponse(
+    val success: Boolean,
+    val message: String,
+    val ccBridgeToken: String? = null,
+    val bridgeConnected: Boolean = false,
 )
 
 // ==================== 消息撤回相关模型 ====================

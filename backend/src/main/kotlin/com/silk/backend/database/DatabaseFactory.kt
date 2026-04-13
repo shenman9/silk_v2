@@ -21,6 +21,8 @@ object DatabaseFactory {
         transaction(database) {
             // 创建所有表
             SchemaUtils.create(Users, Groups, GroupMembers, Contacts, ContactRequests, UserSettingsTable)
+            // 自动添加新列（如 ccBridgeToken）
+            SchemaUtils.createMissingTablesAndColumns(UserSettingsTable)
         }
         
         logger.info("✅ 数据库初始化完成")

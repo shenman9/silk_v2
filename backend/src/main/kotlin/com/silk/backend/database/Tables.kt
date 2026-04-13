@@ -74,6 +74,7 @@ object UserSettingsTable : Table("user_settings") {
     val userId = varchar("user_id", 128).uniqueIndex() // 用户ID（唯一）
     val language = varchar("language", 20).default("CHINESE") // 语言偏好：ENGLISH 或 CHINESE
     val defaultAgentInstruction = text("default_agent_instruction").default("You are a helpful technical research assistant. ") // 默认代理指令
+    val ccBridgeToken = varchar("cc_bridge_token", 64).nullable() // Bridge 认证 token
     val updatedAt = datetime("updated_at").default(LocalDateTime.now()) // 更新时间
     
     override val primaryKey = PrimaryKey(userId)

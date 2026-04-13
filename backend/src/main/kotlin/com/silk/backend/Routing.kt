@@ -4,6 +4,8 @@ import com.silk.backend.auth.AuthService
 import com.silk.backend.auth.GroupService
 import com.silk.backend.database.*
 import com.silk.backend.routes.fileRoutes
+import com.silk.backend.claudecode.BridgeRegistry
+import com.silk.backend.claudecode.ClaudeCodeManager
 import io.ktor.server.application.*
 import io.ktor.server.request.*
 import io.ktor.server.response.*
@@ -450,6 +452,61 @@ fun Application.configureRouting() {
                     UserSettingsResponse(false, "更新设置失败: ${e.message}")
                 )
             }
+        }
+
+        // ==================== CC 设置 API ====================
+
+        // 获取 CC 设置（token + bridge 状态）
+        get("/users/{userId}/cc-settings") {
+            val userId = call.parameters["userId"] ?: ""
+            if (userId.isBlank()) {
+                call.respond(HttpStatusCode.BadRequest, CcSettingsResponse(false, "用户ID不能为空"))
+                return@get
+            }
+            try {
+                val token = UserSettingsRepository.getBridgeToken(userId)
+                val connected = BridgeRegistry.isConnected(userId)
+                call.respond(CcSettingsResponse(true, "ok", token, connected))
+            } catch (e: Exception) {
+                logger.error("❌ 获取CC设置失败: {}", e.message)
+                call.respond(HttpStatusCode.InternalServerError, CcSettingsResponse(false, "获取失败: ${e.message}"))
+            }
+        }
+
+        // 生成/重新生成 Bridge Token
+        post("/users/{userId}/cc-settings/generate-token") {
+            val userId = call.parameters["userId"] ?: ""
+            if (userId.isBlank()) {
+                call.respond(HttpStatusCode.BadRequest, CcSettingsResponse(false, "用户ID不能为空"))
+                return@post
+            }
+            try {
+                val token = UserSettingsRepository.generateBridgeToken(userId)
+                // 踢掉用旧 token 认证的 bridge 连接
+                val oldConn = BridgeRegistry.getConnection(userId)
+                if (oldConn != null) {
+                    try {
+                        oldConn.session.close(CloseReason(CloseReason.Codes.NORMAL, "token regenerated"))
+                    } catch (_: Exception) {}
+                    BridgeRegistry.unregister(userId)
+                }
+                val connected = BridgeRegistry.isConnected(userId)
+                call.respond(CcSettingsResponse(true, "Token 已生成", token, connected))
+            } catch (e: Exception) {
+                logger.error("❌ 生成Bridge Token失败: {}", e.message)
+                call.respond(HttpStatusCode.InternalServerError, CcSettingsResponse(false, "生成失败: ${e.message}"))
+            }
+        }
+
+        // 查询 Bridge 在线状态
+        get("/users/{userId}/cc-settings/bridge-status") {
+            val userId = call.parameters["userId"] ?: ""
+            if (userId.isBlank()) {
+                call.respond(HttpStatusCode.BadRequest, CcSettingsResponse(false, "用户ID不能为空"))
+                return@get
+            }
+            val connected = BridgeRegistry.isConnected(userId)
+            call.respond(CcSettingsResponse(true, "ok", bridgeConnected = connected))
         }
         
         // PDF 报告下载端点
@@ -1324,6 +1381,36 @@ fun Application.configureRouting() {
             }
         }
         
+        // ==================== CC Bridge WebSocket ====================
+
+        webSocket("/cc-bridge") {
+            val token = call.request.queryParameters["token"]
+            if (token.isNullOrBlank()) {
+                close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "missing token"))
+                return@webSocket
+            }
+            val userId = UserSettingsRepository.findUserIdByBridgeToken(token)
+            if (userId == null) {
+                close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "invalid token"))
+                return@webSocket
+            }
+
+            logger.info("🔌 Bridge 连接: userId={}", userId)
+            BridgeRegistry.register(userId, this, "")
+            try {
+                incoming.consumeEach { frame ->
+                    if (frame is Frame.Text) {
+                        ClaudeCodeManager.handleBridgeMessage(userId, frame.readText())
+                    }
+                }
+            } catch (e: Exception) {
+                logger.error("❌ Bridge WebSocket 错误: userId={}, error={}", userId, e.message)
+            } finally {
+                logger.info("🔌 Bridge 断开: userId={}", userId)
+                BridgeRegistry.unregister(userId)
+            }
+        }
+
         webSocket("/chat") {
             val userId = call.parameters["userId"] ?: UUID.randomUUID().toString()
             val userName = call.parameters["userName"] ?: "User_${userId.take(6)}"
