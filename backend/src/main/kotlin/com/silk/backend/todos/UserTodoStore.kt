@@ -22,28 +22,37 @@ private data class UserTodoFilePayload(
  * 按用户持久化待办（chat_history/user_todos/{userId}.json）
  */
 object UserTodoStore {
-    private val baseDirs = listOf(
-        "chat_history/user_todos",
-        "backend/chat_history/user_todos",
-        "../chat_history/user_todos"
-    ).distinct()
     private val json = Json {
         ignoreUnknownKeys = true
         prettyPrint = true
     }
     private val locks = ConcurrentHashMap<String, Any>()
 
+    private fun baseDirs(): List<File> {
+        val overrideDir = System.getProperty("silk.userTodoBaseDir")
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?.let(::File)
+        if (overrideDir != null) {
+            return listOf(overrideDir)
+        }
+        return listOf(
+            File("chat_history/user_todos"),
+            File("backend/chat_history/user_todos"),
+            File("../chat_history/user_todos")
+        ).distinct()
+    }
+
     private fun fileFor(userId: String): File {
         val safe = userId.replace(Regex("[^a-zA-Z0-9_-]"), "_")
         val name = "$safe.json"
-        val existing = baseDirs
+        val candidates = baseDirs()
+        val existing = candidates
             .map { File(it, name) }
             .firstOrNull { it.isFile }
         if (existing != null) return existing
-        val existingDir = baseDirs
-            .map { File(it) }
-            .firstOrNull { it.isDirectory }
-        val targetDir = existingDir ?: File("backend/chat_history/user_todos")
+        val existingDir = candidates.firstOrNull { it.isDirectory }
+        val targetDir = existingDir ?: candidates.first()
         targetDir.mkdirs()
         return File(targetDir, name)
     }

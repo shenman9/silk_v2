@@ -5,6 +5,7 @@ import org.jetbrains.exposed.sql.*
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
 import org.jetbrains.exposed.sql.transactions.transaction
 import org.slf4j.LoggerFactory
+import java.io.File
 import java.util.UUID
 import kotlin.random.Random
 
@@ -13,6 +14,15 @@ import kotlin.random.Random
  */
 object GroupRepository {
     private val logger = LoggerFactory.getLogger(GroupRepository::class.java)
+
+    private fun groupSessionDir(groupId: String): File {
+        val configuredRoot = System.getProperty("silk.chatHistoryDir")
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?.let(::File)
+            ?: File("chat_history")
+        return File(configuredRoot, "group_$groupId")
+    }
 
     /**
      * 创建新群组
@@ -51,7 +61,7 @@ object GroupRepository {
                 }
                 
                 // 创建群组的聊天历史文件夹
-                val sessionDir = java.io.File("chat_history/group_$groupId")
+                val sessionDir = groupSessionDir(groupId)
                 sessionDir.mkdirs()
                 logger.info("📁 群组聊天历史文件夹已创建: {}", sessionDir.path)
 
@@ -299,7 +309,7 @@ object GroupRepository {
                 }
                 
                 // 创建聊天历史文件夹
-                val sessionDir = java.io.File("chat_history/group_$groupId")
+                val sessionDir = groupSessionDir(groupId)
                 sessionDir.mkdirs()
                 logger.info("📁 群组聊天历史文件夹已创建: {}", sessionDir.path)
 
@@ -369,7 +379,7 @@ object GroupRepository {
             }
             
             // 删除聊天历史目录
-            val sessionDir = java.io.File("chat_history/group_$groupId")
+            val sessionDir = groupSessionDir(groupId)
             if (sessionDir.exists()) {
                 // 先备份再删除，避免误删导致历史不可恢复
                 ChatHistoryBackupManager.backupGroupHistory(
@@ -449,5 +459,4 @@ object GroupRepository {
         }
     }
 }
-
 
