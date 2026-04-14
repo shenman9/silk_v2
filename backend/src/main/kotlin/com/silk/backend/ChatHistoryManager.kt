@@ -7,6 +7,7 @@ import org.slf4j.LoggerFactory
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * 聊天历史管理器 - 负责持久化聊天记录到文件系统
@@ -23,6 +24,10 @@ class ChatHistoryManager(
             ?.takeIf { it.isNotEmpty() }
             ?: "chat_history"
 ) {
+    companion object {
+        private val sessionLocks = ConcurrentHashMap<String, Any>()
+    }
+
     private val json = Json {
         prettyPrint = true
         ignoreUnknownKeys = true
@@ -94,7 +99,7 @@ class ChatHistoryManager(
      * 先写入临时文件，成功后重命名，避免写入中断导致文件损坏
      */
     private fun atomicWrite(file: File, content: String) {
-        val tempFile = File("${file.path}.tmp")
+        val tempFile = File("${file.path}.${Thread.currentThread().id}.${System.nanoTime()}.tmp")
         try {
             // 写入临时文件
             tempFile.writeText(content)
@@ -104,6 +109,14 @@ class ChatHistoryManager(
             // 清理临时文件
             if (tempFile.exists()) tempFile.delete()
             throw e
+        }
+    }
+
+    private inline fun <T> withSessionLock(sessionName: String, action: () -> T): T {
+        val lockKey = getSessionDir(sessionName)
+        val lock = sessionLocks.computeIfAbsent(lockKey) { Any() }
+        return synchronized(lock) {
+            action()
         }
     }
     
@@ -331,36 +344,38 @@ class ChatHistoryManager(
         userId: String,
         userName: String
     ) {
-        var sessionData = ensureSessionExists(sessionName) ?: run {
-            logger.warn("⚠️ 无法加载或创建会话，跳过成员添加: {}", sessionName)
-            return
-        }
-        
-        // 检查成员是否已存在
-        val existingMember = sessionData.members.find { it.userId == userId }
-        if (existingMember != null) {
-            // 更新为在线状态
-            sessionData.members.remove(existingMember)
-            sessionData.members.add(
-                existingMember.copy(
-                    isOnline = true,
-                    leftAt = null
+        withSessionLock(sessionName) {
+            val sessionData = ensureSessionExists(sessionName) ?: run {
+                logger.warn("⚠️ 无法加载或创建会话，跳过成员添加: {}", sessionName)
+                return
+            }
+
+            // 检查成员是否已存在
+            val existingMember = sessionData.members.find { it.userId == userId }
+            if (existingMember != null) {
+                // 更新为在线状态
+                sessionData.members.remove(existingMember)
+                sessionData.members.add(
+                    existingMember.copy(
+                        isOnline = true,
+                        leftAt = null
+                    )
                 )
-            )
-        } else {
-            // 添加新成员
-            sessionData.members.add(
-                SessionMember(
-                    userId = userId,
-                    userName = userName,
-                    joinedAt = System.currentTimeMillis(),
-                    isOnline = true
+            } else {
+                // 添加新成员
+                sessionData.members.add(
+                    SessionMember(
+                        userId = userId,
+                        userName = userName,
+                        joinedAt = System.currentTimeMillis(),
+                        isOnline = true
+                    )
                 )
-            )
+            }
+
+            saveSessionData(sessionName, sessionData)
+            logger.debug("👤 成员已加入: {} ({})", userName, userId)
         }
-        
-        saveSessionData(sessionName, sessionData)
-        logger.debug("👤 成员已加入: {} ({})", userName, userId)
     }
     
     /**
@@ -370,19 +385,21 @@ class ChatHistoryManager(
         sessionName: String,
         userId: String
     ) {
-        val sessionData = loadSessionData(sessionName) ?: return
-        
-        val member = sessionData.members.find { it.userId == userId }
-        if (member != null) {
-            sessionData.members.remove(member)
-            sessionData.members.add(
-                member.copy(
-                    isOnline = false,
-                    leftAt = System.currentTimeMillis()
+        withSessionLock(sessionName) {
+            val sessionData = loadSessionData(sessionName) ?: return
+
+            val member = sessionData.members.find { it.userId == userId }
+            if (member != null) {
+                sessionData.members.remove(member)
+                sessionData.members.add(
+                    member.copy(
+                        isOnline = false,
+                        leftAt = System.currentTimeMillis()
+                    )
                 )
-            )
-            saveSessionData(sessionName, sessionData)
-            logger.debug("👋 成员已离开: {} ({})", member.userName, userId)
+                saveSessionData(sessionName, sessionData)
+                logger.debug("👋 成员已离开: {} ({})", member.userName, userId)
+            }
         }
     }
     

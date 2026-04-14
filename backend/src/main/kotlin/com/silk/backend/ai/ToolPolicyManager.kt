@@ -318,6 +318,11 @@ object ToolPolicyManager {
     fun getAuditLog(limit: Int = 100): List<AuditEntry> {
         return auditLog.takeLast(limit)
     }
+
+    internal fun resetForTest() {
+        policies = defaultPolicies.toMutableMap()
+        auditLog.clear()
+    }
     
     /**
      * 获取所有策略（用于调试/展示）

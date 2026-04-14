@@ -68,6 +68,6 @@ dependencies {
     
     // Testing
     testImplementation("io.ktor:ktor-server-test-host:2.3.6")
+    testImplementation("io.ktor:ktor-client-websockets:2.3.6")
     testImplementation("org.jetbrains.kotlin:kotlin-test:1.9.20")
 }
-

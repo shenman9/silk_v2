@@ -12,6 +12,7 @@ import io.ktor.server.websocket.*
 import io.ktor.websocket.*
 import io.ktor.http.*
 import kotlinx.coroutines.channels.consumeEach
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.Json
 import org.jetbrains.exposed.sql.*
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
@@ -1351,6 +1352,8 @@ fun Application.configureRouting() {
                         else -> {}
                     }
                 }
+            } catch (_: CancellationException) {
+                logger.debug("WebSocket 会话正常取消: {} ({})", userName, userId)
             } catch (e: Exception) {
                 logger.error("❌ WebSocket 错误: {}", e.localizedMessage)
             } finally {
@@ -1360,4 +1363,3 @@ fun Application.configureRouting() {
         }
     }
 }
-

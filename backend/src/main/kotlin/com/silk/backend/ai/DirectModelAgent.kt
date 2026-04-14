@@ -113,6 +113,11 @@ class DirectModelAgent(
         val description: String,
         val parameters: JsonObject
     )
+
+    private data class ToolExecutionOutcome(
+        val content: String,
+        val auditResult: String
+    )
     
     /**
      * API 请求
@@ -140,6 +145,25 @@ class DirectModelAgent(
     data class Choice(
         val message: ResponseMessage,
         val finish_reason: String? = null
+    )
+
+    internal fun availableToolNamesForTest(): List<String> =
+        getAvailableTools().map { it.function.name }
+
+    internal suspend fun executeToolForTest(
+        toolName: String,
+        arguments: String,
+        requestUserId: String,
+        accessibleSessionIds: List<String>,
+        callback: suspend (stepType: String, content: String, isComplete: Boolean) -> Unit = { _, _, _ -> }
+    ): String = executeTool(
+        toolCall = ToolCall(
+            id = "test-tool-call",
+            function = ToolFunction(name = toolName, arguments = arguments)
+        ),
+        callback = callback,
+        requestUserId = requestUserId,
+        accessibleSessionIds = accessibleSessionIds
     )
     
     @Serializable
@@ -896,24 +920,17 @@ class DirectModelAgent(
             return "⚠️ 权限不足：无法访问该会话的相关内容。"
         }
 
-        // 记录审计日志（此时已通过会话作用域校验）
-        val auditResult = when (policy.permission) {
-            ToolPermission.DISABLED -> "DENIED"
-            ToolPermission.SANDBOXED -> "SANDBOXED"
-            ToolPermission.ALLOWED -> "ALLOWED"
-        }
-        ToolPolicyManager.logAudit(
-            toolName = toolName,
-            permission = policy.permission,
-            result = auditResult,
-            details = "arguments=$arguments",
-            sessionId = sessionId,
-            userId = requestUserId
-        )
-
         when (policy.permission) {
             ToolPermission.DISABLED -> {
                 logger.warn("⛔ 工具 '$toolName' 已被禁用")
+                ToolPolicyManager.logAudit(
+                    toolName = toolName,
+                    permission = policy.permission,
+                    result = "DENIED",
+                    details = "tool disabled; arguments=$arguments",
+                    sessionId = sessionId,
+                    userId = requestUserId
+                )
                 callback("tool", "⛔ 工具已禁用: $toolName", false)
                 return "⚠️ 该功能已被禁用。原因：${policy.description}"
             }
@@ -931,47 +948,96 @@ class DirectModelAgent(
         
         return try {
             val args = json.parseToJsonElement(arguments).jsonObject
-            
-            when (toolName) {
+
+            val outcome = when (toolName) {
                 "search_files" -> {
                     val query = args["query"]?.jsonPrimitive?.content ?: ""
                     val path = args["path"]?.jsonPrimitive?.content ?: "."
                     // ✅ 应用沙箱限制
-                    searchFilesWithPolicy(query, path, policy, accessibleSessionIds)
+                    val result = searchFilesWithPolicy(query, path, policy, accessibleSessionIds)
+                    ToolExecutionOutcome(
+                        content = result,
+                        auditResult = if (result.startsWith("⛔")) "DENIED" else defaultAuditResult(policy.permission)
+                    )
                 }
                 
                 "search_web" -> {
                     val query = args["query"]?.jsonPrimitive?.content ?: ""
-                    searchWeb(query)
+                    ToolExecutionOutcome(
+                        content = searchWeb(query),
+                        auditResult = defaultAuditResult(policy.permission)
+                    )
                 }
                 
                 "read_file" -> {
                     val path = args["path"]?.jsonPrimitive?.content ?: ""
                     // ✅ 应用沙箱限制
-                    readFileWithPolicy(path, policy, accessibleSessionIds)
+                    val result = readFileWithPolicy(path, policy, accessibleSessionIds)
+                    ToolExecutionOutcome(
+                        content = result,
+                        auditResult = if (result.startsWith("⛔")) "DENIED" else defaultAuditResult(policy.permission)
+                    )
                 }
                 
                 "execute_command" -> {
                     val command = args["command"]?.jsonPrimitive?.content ?: ""
                     // ✅ 已经在上面检查过权限，这里执行沙箱化的命令
-                    executeCommandWithPolicy(command, policy, requestUserId)
+                    val result = executeCommandWithPolicy(command, policy, requestUserId)
+                    ToolExecutionOutcome(
+                        content = result,
+                        auditResult = if (result.startsWith("⚠️")) "DENIED" else defaultAuditResult(policy.permission)
+                    )
                 }
                 
                 "search_context" -> {
                     val query = args["query"]?.jsonPrimitive?.content ?: ""
-                    searchContext(query, requestUserId, accessibleSessionIds)
+                    val result = searchContext(query, requestUserId, accessibleSessionIds)
+                    ToolExecutionOutcome(
+                        content = result,
+                        auditResult = if (result.startsWith("⛔")) "DENIED" else defaultAuditResult(policy.permission)
+                    )
                 }
                 
                 "get_group_stats" -> {
-                    getGroupStats()
+                    ToolExecutionOutcome(
+                        content = getGroupStats(),
+                        auditResult = defaultAuditResult(policy.permission)
+                    )
                 }
                 
-                else -> "未知工具: $toolName"
+                else -> ToolExecutionOutcome(
+                    content = "未知工具: $toolName",
+                    auditResult = "DENIED"
+                )
             }
+
+            ToolPolicyManager.logAudit(
+                toolName = toolName,
+                permission = policy.permission,
+                result = outcome.auditResult,
+                details = "arguments=$arguments",
+                sessionId = sessionId,
+                userId = requestUserId
+            )
+            outcome.content
         } catch (e: Exception) {
             logger.error("❌ 工具执行失败: ${e.message}")
+            ToolPolicyManager.logAudit(
+                toolName = toolName,
+                permission = policy.permission,
+                result = defaultAuditResult(policy.permission),
+                details = "arguments=$arguments; error=${e.message}",
+                sessionId = sessionId,
+                userId = requestUserId
+            )
             "工具执行失败: ${e.message}"
         }
+    }
+
+    private fun defaultAuditResult(permission: ToolPermission): String = when (permission) {
+        ToolPermission.DISABLED -> "DENIED"
+        ToolPermission.SANDBOXED -> "SANDBOXED"
+        ToolPermission.ALLOWED -> "ALLOWED"
     }
     
     // ==================== 工具实现 ====================
