@@ -17,7 +17,7 @@ class StreamParserTest {
             )
         )
 
-        assertEquals("费用: $0.0500 | 耗时: 12.3s | 轮次: 3 | 会话: abc-123-...", formatted)
+        assertEquals("⏱ 费用: $0.0500 | 耗时: 12.3s | 轮次: 3 | 会话: abc-123-...", formatted)
     }
 
     @Test
