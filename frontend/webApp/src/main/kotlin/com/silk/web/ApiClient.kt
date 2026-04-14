@@ -145,14 +145,32 @@ data class SimpleResponse(
     val message: String
 )
 
+@Serializable
+data class ExportMarkdownResponse(
+    val success: Boolean,
+    val message: String,
+    val fileName: String = "",
+    val markdown: String = ""
+)
+
 object ApiClient {
     private val BASE_URL: String
         get() {
-            // 优先走同源（由 nginx 统一代理到后端），避免跨端口 CORS 导致登录卡住。
-            val origin = window.location.origin
-            return if (origin.endsWith("/")) origin.dropLast(1) else origin
+            val protocol = window.location.protocol
+            val hostname = window.location.hostname
+            val origin = window.location.origin.let { if (it.endsWith("/")) it.dropLast(1) else it }
+            val currentPort = window.location.port
+
+            // nginx 同源代理模式下继续走同源；
+            // 本地 silk.sh 分端口模式下，前端(15004)需要直连后端(15003)。
+            return if (currentPort == BuildConfig.FRONTEND_PORT) {
+                "$protocol//$hostname:${BuildConfig.BACKEND_HTTP_PORT}"
+            } else {
+                origin
+            }
         }
     private val jsonParser = Json { ignoreUnknownKeys = true }
+
     
     suspend fun register(
         loginName: String,
@@ -511,6 +529,16 @@ object ApiClient {
         } catch (e: Exception) {
             console.log("撤回消息失败:", e)
             SimpleResponse(false, "网络错误")
+        }
+    }
+
+    suspend fun exportGroupMarkdown(groupId: String, userId: String): ExportMarkdownResponse {
+        return try {
+            val response = get("/groups/$groupId?export=obsidian_markdown&userId=$userId")
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            console.log("导出聊天记录失败:", e)
+            ExportMarkdownResponse(false, "网络错误: ${e.message}")
         }
     }
     

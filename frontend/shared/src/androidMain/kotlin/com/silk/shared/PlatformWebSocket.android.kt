@@ -5,7 +5,11 @@ import io.ktor.client.engine.okhttp.*
 import io.ktor.client.plugins.websocket.*
 import io.ktor.websocket.*
 import kotlinx.coroutines.*
+import java.security.SecureRandom
+import java.security.cert.X509Certificate
 import java.util.concurrent.atomic.AtomicBoolean
+import javax.net.ssl.SSLContext
+import javax.net.ssl.X509TrustManager
 
 actual class PlatformWebSocket actual constructor(
     private val serverUrl: String,
@@ -15,7 +19,25 @@ actual class PlatformWebSocket actual constructor(
     private val onError: (String) -> Unit,
     private val onLog: LogCallback?
 ) {
+    private val trustAllManager = object : X509TrustManager {
+        override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) = Unit
+        override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) = Unit
+        override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
+    }
+
+    private val unsafeSslSocketFactory = SSLContext.getInstance("TLS").run {
+        init(null, arrayOf(trustAllManager), SecureRandom())
+        socketFactory
+    }
+
     private val client = HttpClient(OkHttp) {
+        engine {
+            config {
+                // 兼容远端自签证书与域名不匹配（例如证书 CN=localhost）。
+                sslSocketFactory(unsafeSslSocketFactory, trustAllManager)
+                hostnameVerifier { _, _ -> true }
+            }
+        }
         install(WebSockets) {
             pingInterval = 10_000  // 10秒 ping 间隔，更频繁的保活
         }

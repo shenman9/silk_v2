@@ -42,6 +42,8 @@ class AppState(
     val versionChecker: VersionChecker
     
     init {
+        BackendUrlHolder.init(context)
+
         // 获取当前 App 版本信息
         val packageInfo = try {
             context.packageManager.getPackageInfo(context.packageName, 0)

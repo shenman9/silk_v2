@@ -10,6 +10,8 @@ import com.silk.shared.models.Message
 import com.silk.shared.models.MessageType
 import com.silk.shared.models.UserSettings
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.await
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.browser.window
 import kotlinx.browser.document
 import kotlin.js.Date
@@ -62,6 +64,60 @@ object SilkColors {
     const val divider = "#F0E8DC"
 }
 
+private fun backendHttpOrigin(): String {
+    val protocol = window.location.protocol
+    val hostname = window.location.hostname
+    val currentPort = window.location.port
+    return if (currentPort == BuildConfig.FRONTEND_PORT) {
+        "$protocol//$hostname:${BuildConfig.BACKEND_HTTP_PORT}"
+    } else {
+        window.location.origin
+    }
+}
+
+private fun backendWsOrigin(): String {
+    val wsProtocol = if (window.location.protocol == "https:") "wss:" else "ws:"
+    val currentPort = window.location.port
+    val host = if (currentPort == BuildConfig.FRONTEND_PORT) {
+        "${window.location.hostname}:${BuildConfig.BACKEND_HTTP_PORT}"
+    } else {
+        window.location.host
+    }
+    return "$wsProtocol//$host"
+}
+
+private fun downloadAsFile(content: String, fileName: String) {
+    val blob = org.w3c.files.Blob(
+        arrayOf(content),
+        org.w3c.files.BlobPropertyBag(type = "text/markdown;charset=utf-8")
+    )
+    val windowJs = js("window")
+    val objectUrl = windowJs.URL.createObjectURL(blob) as String
+    val anchor = kotlinx.browser.document.createElement("a") as org.w3c.dom.HTMLAnchorElement
+    anchor.style.display = "none"
+    anchor.href = objectUrl
+    anchor.download = fileName
+    kotlinx.browser.document.body?.appendChild(anchor)
+    anchor.click()
+    kotlinx.browser.document.body?.removeChild(anchor)
+    windowJs.URL.revokeObjectURL(objectUrl)
+}
+
+private fun parseFileNameFromContentDisposition(contentDisposition: String?): String? {
+    if (contentDisposition.isNullOrBlank()) return null
+    val fileNameStar = Regex("filename\\*=UTF-8''([^;]+)", RegexOption.IGNORE_CASE)
+        .find(contentDisposition)
+        ?.groupValues
+        ?.getOrNull(1)
+    if (!fileNameStar.isNullOrBlank()) {
+        return fileNameStar.replace("%20", " ")
+    }
+    return Regex("filename=\"?([^\";]+)\"?", RegexOption.IGNORE_CASE)
+        .find(contentDisposition)
+        ?.groupValues
+        ?.getOrNull(1)
+}
+
 fun main() {
     console.log("🧵 Silk 正在启动...")
     console.log("1️⃣ 准备渲染...")
@@ -82,6 +138,8 @@ fun main() {
 @Composable
 fun SilkApp() {
     val appState = remember { WebAppState() }
+    val scope = rememberCoroutineScope()
+
     
     console.log("📍 当前场景:", appState.currentScene.toString())
     console.log("👤 当前用户:", appState.currentUser?.fullName ?: "未登录")
@@ -130,6 +188,10 @@ fun ChatScene(appState: WebAppState) {
     
     val group = appState.selectedGroup
     val user = appState.currentUser
+    val scope = rememberCoroutineScope()
+    var userGroups by remember(user?.id) { mutableStateOf<List<Group>>(emptyList()) }
+    var unreadCounts by remember(user?.id) { mutableStateOf<Map<String, Int>>(emptyMap()) }
+    var isLoadingGroups by remember(user?.id) { mutableStateOf(true) }
     
     console.log("   群组:", group?.name ?: "null")
     console.log("   用户:", user?.fullName ?: "null")
@@ -144,10 +206,206 @@ fun ChatScene(appState: WebAppState) {
         }
         return
     }
+
+    suspend fun refreshSidebarGroups() {
+        isLoadingGroups = true
+        try {
+            val groupsResponse = ApiClient.getUserGroups(user.id)
+            if (groupsResponse.success) {
+                userGroups = groupsResponse.groups ?: emptyList()
+            }
+            val unreadResponse = ApiClient.getUnreadCounts(user.id)
+            if (unreadResponse.success) {
+                unreadCounts = unreadResponse.unreadCounts
+            }
+        } catch (e: Exception) {
+            console.error("❌ 加载聊天室群组列表失败:", e)
+        } finally {
+            isLoadingGroups = false
+        }
+    }
+
+    LaunchedEffect(user.id, group.id) {
+        refreshSidebarGroups()
+    }
+
+    LaunchedEffect(user.id) {
+        while (true) {
+            kotlinx.coroutines.delay(30000)
+            try {
+                val unreadResponse = ApiClient.getUnreadCounts(user.id)
+                if (unreadResponse.success) {
+                    unreadCounts = unreadResponse.unreadCounts
+                }
+            } catch (e: Exception) {
+                console.error("❌ 刷新未读消息失败:", e)
+            }
+        }
+    }
     
     console.log("✅ 群组和用户都有效，渲染聊天界面")
-    // 使用原来的ChatApp逻辑，但传入用户和群组信息
-    ChatAppWithGroup(user, group, appState)
+    Div({
+        style {
+            display(DisplayStyle.Flex)
+            height(100.vh)
+            width(100.vw)
+            property("overflow", "hidden")
+            property("background", SilkColors.backgroundGradient)
+        }
+    }) {
+        Div({
+            style {
+                width(320.px)
+                property("flex-shrink", "0")
+                property("border-right", "1px solid ${SilkColors.border}")
+                backgroundColor(Color("rgba(255,255,255,0.88)"))
+                display(DisplayStyle.Flex)
+                flexDirection(FlexDirection.Column)
+                property("overflow", "hidden")
+                property("backdrop-filter", "blur(6px)")
+            }
+        }) {
+            Div({
+                style {
+                    padding(16.px, 16.px, 12.px, 16.px)
+                    property("border-bottom", "1px solid ${SilkColors.border}")
+                    color(Color(SilkColors.textPrimary))
+                    fontSize(16.px)
+                    property("font-weight", "700")
+                    property("letter-spacing", "1px")
+                }
+            }) {
+                Text("全部群组")
+            }
+
+            Div({
+                style {
+                    property("flex", "1")
+                    property("overflow-y", "auto")
+                    padding(10.px)
+                }
+            }) {
+                when {
+                    isLoadingGroups -> {
+                        Div({
+                            style {
+                                color(Color(SilkColors.textSecondary))
+                                fontSize(13.px)
+                                textAlign("center")
+                                padding(18.px)
+                            }
+                        }) {
+                            Text("加载群组中...")
+                        }
+                    }
+                    userGroups.isEmpty() -> {
+                        Div({
+                            style {
+                                color(Color(SilkColors.textSecondary))
+                                fontSize(13.px)
+                                textAlign("center")
+                                padding(18.px)
+                            }
+                        }) {
+                            Text("暂无群组")
+                        }
+                    }
+                    else -> {
+                        userGroups.forEach { item ->
+                            val isActive = item.id == group.id
+                            val unread = unreadCounts[item.id] ?: 0
+                            Div({
+                                style {
+                                    padding(12.px, 14.px)
+                                    marginBottom(8.px)
+                                    borderRadius(8.px)
+                                    backgroundColor(
+                                        if (isActive) Color("rgba(201, 168, 108, 0.2)")
+                                        else Color(SilkColors.surfaceElevated)
+                                    )
+                                    property("border", if (isActive) "1px solid ${SilkColors.primary}" else "1px solid ${SilkColors.border}")
+                                    property("box-shadow", if (isActive) "0 2px 8px rgba(169, 137, 77, 0.22)" else "0 1px 4px rgba(169, 137, 77, 0.08)")
+                                    property("cursor", "pointer")
+                                    property("transition", "all 0.2s ease")
+                                }
+                                onClick {
+                                    if (item.id != group.id) {
+                                        scope.launch {
+                                            ApiClient.markGroupAsRead(user.id, item.id)
+                                            unreadCounts = unreadCounts - item.id
+                                            appState.selectGroup(item)
+                                        }
+                                    }
+                                }
+                            }) {
+                                Div({
+                                    style {
+                                        display(DisplayStyle.Flex)
+                                        justifyContent(JustifyContent.SpaceBetween)
+                                        alignItems(AlignItems.Center)
+                                        property("gap", "10px")
+                                    }
+                                }) {
+                                    Span({
+                                        style {
+                                            color(Color(SilkColors.textPrimary))
+                                            fontSize(14.px)
+                                            property("font-weight", if (isActive) "700" else "600")
+                                            property("flex", "1")
+                                            property("overflow", "hidden")
+                                            property("text-overflow", "ellipsis")
+                                            property("white-space", "nowrap")
+                                        }
+                                    }) {
+                                        Text(item.name)
+                                    }
+                                    if (unread > 0) {
+                                        Span({
+                                            style {
+                                                minWidth(22.px)
+                                                height(22.px)
+                                                padding(0.px, 6.px)
+                                                borderRadius(11.px)
+                                                backgroundColor(Color("#FF5722"))
+                                                color(Color.white)
+                                                fontSize(11.px)
+                                                property("font-weight", "700")
+                                                display(DisplayStyle.Flex)
+                                                justifyContent(JustifyContent.Center)
+                                                alignItems(AlignItems.Center)
+                                            }
+                                        }) {
+                                            Text(if (unread > 99) "99+" else unread.toString())
+                                        }
+                                    }
+                                }
+                                Div({
+                                    style {
+                                        color(Color(SilkColors.textSecondary))
+                                        fontSize(11.px)
+                                        marginTop(4.px)
+                                        property("letter-spacing", "1px")
+                                    }
+                                }) {
+                                    Text("[${item.invitationCode}]")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Div({
+            style {
+                property("flex", "1")
+                minWidth(0.px)
+            }
+        }) {
+            // 右侧仍复用原有聊天逻辑
+            ChatAppWithGroup(user, group, appState)
+        }
+    }
 }
 
 // Silk样式表 - 丝滑温暖风格
@@ -514,11 +772,9 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
         }
     }
     
-    // 动态生成 WebSocket URL，根据当前页面的协议和主机
+    // 动态生成 WebSocket URL，兼容同源代理与本地分端口开发
     val wsUrl = remember {
-        val protocol = if (window.location.protocol == "https:") "wss:" else "ws:"
-        val host = window.location.host
-        val url = "$protocol//$host"
+        val url = backendWsOrigin()
         console.log("🔌 WebSocket URL: $url")
         url
     }
@@ -534,6 +790,8 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
     var messageText by remember { mutableStateOf("") }
     var showInvitationDialog by remember { mutableStateOf(false) }
     var isUploading by remember { mutableStateOf(false) }
+    var isExportingMarkdown by remember { mutableStateOf(false) }
+    var exportMarkdownHint by remember { mutableStateOf<String?>(null) }
     var showFolderExplorer by remember { mutableStateOf(false) }
     var folderFiles by remember { mutableStateOf<List<FileInfo>>(emptyList()) }
     var isLoadingFiles by remember { mutableStateOf(false) }
@@ -761,6 +1019,122 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                     }
                 }) {
                     Text("📁")
+                }
+
+                // 📝 导出按钮 - 导出聊天为 Obsidian Markdown
+                Button({
+                    style {
+                        padding(10.px, 14.px)
+                        backgroundColor(Color(if (isExportingMarkdown) "rgba(255,255,255,0.35)" else "rgba(255,255,255,0.2)"))
+                        color(Color.white)
+                        border { width(0.px) }
+                        borderRadius(8.px)
+                        property("cursor", if (isExportingMarkdown) "not-allowed" else "pointer")
+                        fontSize(16.px)
+                        property("backdrop-filter", "blur(4px)")
+                        property("transition", "all 0.2s ease")
+                        property("opacity", if (isExportingMarkdown) "0.85" else "1")
+                    }
+                    onClick {
+                        if (isExportingMarkdown) return@onClick
+                        scope.launch {
+                            isExportingMarkdown = true
+                            exportMarkdownHint = "正在导出..."
+                            try {
+                                var vaultHandle: dynamic = null
+                                if (ObsidianVaultManager.isSupported()) {
+                                    vaultHandle = ObsidianVaultManager.getCachedHandleIfValid()
+                                    if (vaultHandle == null) {
+                                        exportMarkdownHint = "请选择 Obsidian Vault 目录..."
+                                        vaultHandle = ObsidianVaultManager.pickVaultDirectory()
+                                    }
+                                }
+
+                                exportMarkdownHint = "正在获取聊天记录..."
+                                val result = ApiClient.exportGroupMarkdown(group.id, user.id)
+                                if (!result.success) {
+                                    exportMarkdownHint = "导出失败：${result.message}"
+                                    window.alert("导出失败：${result.message}")
+                                    return@launch
+                                }
+                                val fileName = result.fileName.ifBlank { "silk_group_${group.id}.md" }
+
+                                if (vaultHandle != null) {
+                                    exportMarkdownHint = "正在写入 Vault..."
+                                    try {
+                                        val relativePath = ObsidianVaultManager.saveToVault(
+                                            vaultHandle, group.name, result.markdown, fileName
+                                        )
+                                        console.log("✅ 已导出到 Obsidian Vault:", relativePath)
+                                        exportMarkdownHint = "已导出: $relativePath"
+                                    } catch (t: Throwable) {
+                                        console.warn("Vault 写入失败，回退到下载:", t)
+                                        downloadAsFile(result.markdown, fileName)
+                                        exportMarkdownHint = "Vault写入失败，已下载：$fileName"
+                                    }
+                                } else {
+                                    downloadAsFile(result.markdown, fileName)
+                                    console.log("✅ 聊天记录已导出:", fileName)
+                                    exportMarkdownHint = "导出成功：$fileName"
+                                }
+                            } catch (t: Throwable) {
+                                val msg = t.message ?: t.toString()
+                                if (msg.contains("abort", ignoreCase = true)) {
+                                    exportMarkdownHint = "已取消"
+                                } else {
+                                    console.error("❌ 导出异常:", t)
+                                    exportMarkdownHint = "导出异常: $msg"
+                                    window.alert("导出失败: $msg")
+                                }
+                            } finally {
+                                isExportingMarkdown = false
+                            }
+                        }
+                    }
+                }) {
+                    Text(if (isExportingMarkdown) "导出中..." else "📝")
+                }
+                exportMarkdownHint?.let { hint ->
+                    Span({
+                        style {
+                            fontSize(11.px)
+                            color(Color.white)
+                            property("max-width", "260px")
+                            property("overflow", "hidden")
+                            property("text-overflow", "ellipsis")
+                            property("white-space", "nowrap")
+                        }
+                        title(hint)
+                    }) {
+                        Text(hint)
+                    }
+                }
+                if (ObsidianVaultManager.isSupported()) {
+                    Span({
+                        style {
+                            fontSize(11.px)
+                            color(Color("rgba(255,255,255,0.6)"))
+                            property("cursor", "pointer")
+                            property("text-decoration", "underline")
+                            property("margin-left", "4px")
+                        }
+                        title("重新选择 Obsidian Vault 目录")
+                        onClick {
+                            scope.launch {
+                                try {
+                                    ObsidianVaultManager.clearCachedHandle()
+                                    ObsidianVaultManager.pickVaultDirectory()
+                                    exportMarkdownHint = "Vault 目录已更新"
+                                } catch (e: Exception) {
+                                    if (e.message?.contains("abort", ignoreCase = true) != true) {
+                                        exportMarkdownHint = "更换目录失败: ${e.message}"
+                                    }
+                                }
+                            }
+                        }
+                    }) {
+                        Text("📂")
+                    }
                 }
                 
                 // 邀请按钮
@@ -1003,9 +1377,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
         DisposableEffect(group.id) {
             val sessionId = group.id
             val userId = user.id
-            val protocol = window.location.protocol
-            val host = window.location.host
-            val uploadUrl = "$protocol//$host/api/files/upload"
+            val uploadUrl = "${backendHttpOrigin()}/api/files/upload"
             val primaryColor = SilkColors.primary
             
             // Store values in window for JavaScript to access
@@ -1934,9 +2306,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
         onChange {
             val sessionId = group.id
             val userId = user.id
-            val protocol = window.location.protocol
-            val host = window.location.host
-            val uploadUrl = "$protocol//$host/api/files/upload"
+            val uploadUrl = "${backendHttpOrigin()}/api/files/upload"
             
             js("""
                 (function() {
@@ -1989,9 +2359,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
         onChange {
             val sessionId = group.id
             val userId = user.id
-            val protocol = window.location.protocol
-            val host = window.location.host
-            val uploadUrl = "$protocol//$host/api/files/upload"
+            val uploadUrl = "${backendHttpOrigin()}/api/files/upload"
             
             js("""
                 (function() {
@@ -2105,9 +2473,7 @@ fun FolderExplorerDialog(
     
     // 直接使用 fetch 并更新状态（简化逻辑，避免事件时序问题）
     LaunchedEffect(groupId) {
-        val protocol = window.location.protocol
-        val host = window.location.host
-        val apiUrl = "$protocol//$host/api/files/list/$groupId"
+        val apiUrl = "${backendHttpOrigin()}/api/files/list/$groupId"
         
         window.asDynamic().tempApiUrl = apiUrl
         window.asDynamic().folderLoadCallback = { data: dynamic ->
@@ -2440,9 +2806,7 @@ fun FolderExplorerDialog(
                                     property("transition", "all 0.2s ease")
                                 }
                                 onClick {
-                                    val protocol = window.location.protocol
-                                    val host = window.location.host
-                                    val fullUrl = "$protocol//$host$downloadUrl"
+                                    val fullUrl = "${backendHttpOrigin()}$downloadUrl"
                                     window.open(fullUrl, "_blank")
                                 }
                             }) {
@@ -3120,7 +3484,7 @@ fun MessageItem(
                         
                         // 显示下载按钮 - 丝滑绿色
                         if (pdfUrl != null) {
-                            val baseUrl = window.location.origin
+                            val baseUrl = backendHttpOrigin()
                             val fullUrl = "$baseUrl$pdfUrl"
                             
                             Div({
@@ -3337,7 +3701,7 @@ fun MessageItem(
                     }
                     onClick {
                         if (downloadUrl.isNotEmpty()) {
-                            val baseUrl = window.location.origin
+                            val baseUrl = backendHttpOrigin()
                             val fullUrl = "$baseUrl$downloadUrl"
                             console.log("打开文件下载: $fullUrl")
                             

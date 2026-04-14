@@ -3,6 +3,7 @@ package com.silk.backend
 import com.silk.backend.auth.AuthService
 import com.silk.backend.auth.GroupService
 import com.silk.backend.database.*
+import com.silk.backend.export.ChatObsidianExporter
 import com.silk.backend.routes.fileRoutes
 import com.silk.backend.claudecode.BridgeRegistry
 import com.silk.backend.claudecode.ClaudeCodeManager
@@ -15,6 +16,8 @@ import io.ktor.websocket.*
 import io.ktor.http.*
 import kotlinx.coroutines.channels.consumeEach
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import org.jetbrains.exposed.sql.*
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
 import org.jetbrains.exposed.sql.transactions.transaction
@@ -678,6 +681,60 @@ fun Application.configureRouting() {
         
         get("/groups/{groupId}") {
             val groupId = call.parameters["groupId"] ?: ""
+            val exportMode = call.request.queryParameters["export"]?.trim().orEmpty()
+            if (exportMode == "obsidian_markdown") {
+                val userId = call.request.queryParameters["userId"]?.trim().orEmpty()
+                fun respondExportJson(success: Boolean, message: String, fileName: String = "", markdown: String = ""): String {
+                    return buildJsonObject {
+                        put("success", success)
+                        put("message", message)
+                        put("fileName", fileName)
+                        put("markdown", markdown)
+                    }.toString()
+                }
+                if (groupId.isBlank()) {
+                    call.respondText(respondExportJson(false, "缺少 groupId"), ContentType.Application.Json)
+                    return@get
+                }
+                if (userId.isBlank()) {
+                    call.respondText(respondExportJson(false, "缺少 userId"), ContentType.Application.Json)
+                    return@get
+                }
+
+                val group = GroupRepository.findGroupById(groupId)
+                if (group == null) {
+                    call.respondText(respondExportJson(false, "群组不存在"), ContentType.Application.Json)
+                    return@get
+                }
+                if (!GroupRepository.isUserInGroup(groupId, userId)) {
+                    call.respondText(respondExportJson(false, "您不是该群组成员"), ContentType.Application.Json)
+                    return@get
+                }
+
+                val sessionName = "group_$groupId"
+                val historyManager = ChatHistoryManager()
+                val chatHistory = historyManager.loadChatHistory(sessionName)
+                if (chatHistory == null) {
+                    call.respondText(respondExportJson(false, "聊天记录不存在"), ContentType.Application.Json)
+                    return@get
+                }
+
+                val markdown = ChatObsidianExporter.toMarkdown(
+                    groupId = groupId,
+                    groupName = group.name,
+                    sessionName = sessionName,
+                    history = chatHistory
+                )
+                val safeGroupName = group.name
+                    .replace(Regex("[^a-zA-Z0-9._-]"), "_")
+                    .trim('_')
+                    .ifBlank { "group_$groupId" }
+                val fileName = "${safeGroupName}_${System.currentTimeMillis()}.md"
+
+                call.respondText(respondExportJson(true, "ok", fileName, markdown), ContentType.Application.Json)
+                return@get
+            }
+
             val response = GroupService.getGroupDetails(groupId)
             call.respond(response)
         }
@@ -982,6 +1039,159 @@ fun Application.configureRouting() {
                 logger.error("❌ 删除群组失败: {}", e.message)
                 call.respond(HttpStatusCode.BadRequest, SimpleResponse(false, "请求格式错误"))
             }
+        }
+
+        // 导出群组聊天记录为 Obsidian Markdown（兼容 /api 与非 /api 前缀）
+        get("/api/groups/{groupId}/export/markdown") {
+            val groupId = call.parameters["groupId"] ?: return@get call.respond(
+                HttpStatusCode.BadRequest,
+                SimpleResponse(false, "缺少群组ID")
+            )
+            val userId = call.request.queryParameters["userId"]?.trim().orEmpty()
+            if (userId.isBlank()) {
+                call.respond(HttpStatusCode.BadRequest, SimpleResponse(false, "缺少 userId"))
+                return@get
+            }
+
+            val group = GroupRepository.findGroupById(groupId)
+            if (group == null) {
+                call.respond(HttpStatusCode.NotFound, SimpleResponse(false, "群组不存在"))
+                return@get
+            }
+            if (!GroupRepository.isUserInGroup(groupId, userId)) {
+                call.respond(HttpStatusCode.Forbidden, SimpleResponse(false, "您不是该群组成员"))
+                return@get
+            }
+
+            val sessionName = "group_$groupId"
+            val historyManager = ChatHistoryManager()
+            val chatHistory = historyManager.loadChatHistory(sessionName)
+            if (chatHistory == null) {
+                call.respond(HttpStatusCode.NotFound, SimpleResponse(false, "聊天记录不存在"))
+                return@get
+            }
+
+            val markdown = ChatObsidianExporter.toMarkdown(
+                groupId = groupId,
+                groupName = group.name,
+                sessionName = sessionName,
+                history = chatHistory
+            )
+            val safeGroupName = group.name
+                .replace(Regex("[^a-zA-Z0-9._-]"), "_")
+                .trim('_')
+                .ifBlank { "group_$groupId" }
+            val fileName = "${safeGroupName}_${System.currentTimeMillis()}.md"
+
+            call.response.headers.append(
+                HttpHeaders.ContentDisposition,
+                ContentDisposition.Attachment.withParameter(ContentDisposition.Parameters.FileName, fileName).toString()
+            )
+            call.response.headers.append("X-Silk-Group-Id", groupId)
+            call.response.headers.append("X-Silk-Session-Id", chatHistory.sessionId)
+            call.response.headers.append("X-Silk-Updated-At", (chatHistory.messages.maxOfOrNull { it.timestamp } ?: 0L).toString())
+            call.respondText(markdown, ContentType.parse("text/markdown; charset=utf-8"))
+        }
+        get("/groups/{groupId}/export/markdown") {
+            val groupId = call.parameters["groupId"] ?: return@get call.respond(
+                HttpStatusCode.BadRequest,
+                SimpleResponse(false, "缺少群组ID")
+            )
+            val userId = call.request.queryParameters["userId"]?.trim().orEmpty()
+            if (userId.isBlank()) {
+                call.respond(HttpStatusCode.BadRequest, SimpleResponse(false, "缺少 userId"))
+                return@get
+            }
+
+            val group = GroupRepository.findGroupById(groupId)
+            if (group == null) {
+                call.respond(HttpStatusCode.NotFound, SimpleResponse(false, "群组不存在"))
+                return@get
+            }
+            if (!GroupRepository.isUserInGroup(groupId, userId)) {
+                call.respond(HttpStatusCode.Forbidden, SimpleResponse(false, "您不是该群组成员"))
+                return@get
+            }
+
+            val sessionName = "group_$groupId"
+            val historyManager = ChatHistoryManager()
+            val chatHistory = historyManager.loadChatHistory(sessionName)
+            if (chatHistory == null) {
+                call.respond(HttpStatusCode.NotFound, SimpleResponse(false, "聊天记录不存在"))
+                return@get
+            }
+
+            val markdown = ChatObsidianExporter.toMarkdown(
+                groupId = groupId,
+                groupName = group.name,
+                sessionName = sessionName,
+                history = chatHistory
+            )
+            val safeGroupName = group.name
+                .replace(Regex("[^a-zA-Z0-9._-]"), "_")
+                .trim('_')
+                .ifBlank { "group_$groupId" }
+            val fileName = "${safeGroupName}_${System.currentTimeMillis()}.md"
+
+            call.response.headers.append(
+                HttpHeaders.ContentDisposition,
+                ContentDisposition.Attachment.withParameter(ContentDisposition.Parameters.FileName, fileName).toString()
+            )
+            call.response.headers.append("X-Silk-Group-Id", groupId)
+            call.response.headers.append("X-Silk-Session-Id", chatHistory.sessionId)
+            call.response.headers.append("X-Silk-Updated-At", (chatHistory.messages.maxOfOrNull { it.timestamp } ?: 0L).toString())
+            call.respondText(markdown, ContentType.parse("text/markdown; charset=utf-8"))
+        }
+        // 兼容受限网关：走 /download 前缀导出 Obsidian Markdown
+        get("/download/obsidian/{groupId}") {
+            val groupId = call.parameters["groupId"] ?: return@get call.respond(
+                HttpStatusCode.BadRequest,
+                SimpleResponse(false, "缺少群组ID")
+            )
+            val userId = call.request.queryParameters["userId"]?.trim().orEmpty()
+            if (userId.isBlank()) {
+                call.respond(HttpStatusCode.BadRequest, SimpleResponse(false, "缺少 userId"))
+                return@get
+            }
+
+            val group = GroupRepository.findGroupById(groupId)
+            if (group == null) {
+                call.respond(HttpStatusCode.NotFound, SimpleResponse(false, "群组不存在"))
+                return@get
+            }
+            if (!GroupRepository.isUserInGroup(groupId, userId)) {
+                call.respond(HttpStatusCode.Forbidden, SimpleResponse(false, "您不是该群组成员"))
+                return@get
+            }
+
+            val sessionName = "group_$groupId"
+            val historyManager = ChatHistoryManager()
+            val chatHistory = historyManager.loadChatHistory(sessionName)
+            if (chatHistory == null) {
+                call.respond(HttpStatusCode.NotFound, SimpleResponse(false, "聊天记录不存在"))
+                return@get
+            }
+
+            val markdown = ChatObsidianExporter.toMarkdown(
+                groupId = groupId,
+                groupName = group.name,
+                sessionName = sessionName,
+                history = chatHistory
+            )
+            val safeGroupName = group.name
+                .replace(Regex("[^a-zA-Z0-9._-]"), "_")
+                .trim('_')
+                .ifBlank { "group_$groupId" }
+            val fileName = "${safeGroupName}_${System.currentTimeMillis()}.md"
+
+            call.response.headers.append(
+                HttpHeaders.ContentDisposition,
+                ContentDisposition.Attachment.withParameter(ContentDisposition.Parameters.FileName, fileName).toString()
+            )
+            call.response.headers.append("X-Silk-Group-Id", groupId)
+            call.response.headers.append("X-Silk-Session-Id", chatHistory.sessionId)
+            call.response.headers.append("X-Silk-Updated-At", (chatHistory.messages.maxOfOrNull { it.timestamp } ?: 0L).toString())
+            call.respondText(markdown, ContentType.parse("text/markdown; charset=utf-8"))
         }
         
         // ==================== 未读消息 API ====================
@@ -1308,6 +1518,58 @@ fun Application.configureRouting() {
         }
         
         // ==================== 消息发送 API（用于转发等功能） ====================
+        get("/api/messages/export/markdown") {
+            val groupId = call.request.queryParameters["groupId"]?.trim().orEmpty()
+            val userId = call.request.queryParameters["userId"]?.trim().orEmpty()
+            if (groupId.isBlank()) {
+                call.respond(HttpStatusCode.BadRequest, SimpleResponse(false, "缺少 groupId"))
+                return@get
+            }
+            if (userId.isBlank()) {
+                call.respond(HttpStatusCode.BadRequest, SimpleResponse(false, "缺少 userId"))
+                return@get
+            }
+
+            val group = GroupRepository.findGroupById(groupId)
+            if (group == null) {
+                call.respond(HttpStatusCode.NotFound, SimpleResponse(false, "群组不存在"))
+                return@get
+            }
+            if (!GroupRepository.isUserInGroup(groupId, userId)) {
+                call.respond(HttpStatusCode.Forbidden, SimpleResponse(false, "您不是该群组成员"))
+                return@get
+            }
+
+            val sessionName = "group_$groupId"
+            val historyManager = ChatHistoryManager()
+            val chatHistory = historyManager.loadChatHistory(sessionName)
+            if (chatHistory == null) {
+                call.respond(HttpStatusCode.NotFound, SimpleResponse(false, "聊天记录不存在"))
+                return@get
+            }
+
+            val markdown = ChatObsidianExporter.toMarkdown(
+                groupId = groupId,
+                groupName = group.name,
+                sessionName = sessionName,
+                history = chatHistory
+            )
+            val safeGroupName = group.name
+                .replace(Regex("[^a-zA-Z0-9._-]"), "_")
+                .trim('_')
+                .ifBlank { "group_$groupId" }
+            val fileName = "${safeGroupName}_${System.currentTimeMillis()}.md"
+
+            call.response.headers.append(
+                HttpHeaders.ContentDisposition,
+                ContentDisposition.Attachment.withParameter(ContentDisposition.Parameters.FileName, fileName).toString()
+            )
+            call.response.headers.append("X-Silk-Group-Id", groupId)
+            call.response.headers.append("X-Silk-Session-Id", chatHistory.sessionId)
+            call.response.headers.append("X-Silk-Updated-At", (chatHistory.messages.maxOfOrNull { it.timestamp } ?: 0L).toString())
+            call.respondText(markdown, ContentType.parse("text/markdown; charset=utf-8"))
+        }
+
         post("/api/messages/send") {
             try {
                 val request = call.receive<SendMessageRequest>()

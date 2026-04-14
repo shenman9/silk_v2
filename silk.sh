@@ -459,7 +459,52 @@ weaviate_start() {
         fi
     fi
     
-    # 使用 Docker 直接启动 (避免 docker-compose 版本问题)
+    # 优先尝试原生二进制
+    local NATIVE_BIN="$SILK_DIR/search/bin/weaviate"
+    if [ -x "$NATIVE_BIN" ]; then
+        echo -e "  使用原生二进制启动 Weaviate (端口 $WEAVIATE_HTTP_PORT)..."
+        local DATA_DIR="$SILK_DIR/search/weaviate_data"
+        local LOG_FILE="$SILK_DIR/search/weaviate.log"
+        local PID_FILE="$SILK_DIR/search/weaviate.pid"
+        mkdir -p "$DATA_DIR"
+
+        # 先杀掉残留的 memberlist 端口占用
+        local ML_PID=$(lsof -ti :7946 2>/dev/null || true)
+        if [ -n "$ML_PID" ]; then
+            kill "$ML_PID" 2>/dev/null || true
+            sleep 1
+        fi
+
+        PERSISTENCE_DATA_PATH="$DATA_DIR" \
+        QUERY_DEFAULTS_LIMIT=25 \
+        AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED=true \
+        DEFAULT_VECTORIZER_MODULE=none \
+        CLUSTER_HOSTNAME=node1 \
+        LOG_LEVEL=info \
+        nohup "$NATIVE_BIN" \
+            --host 0.0.0.0 \
+            --port $WEAVIATE_HTTP_PORT \
+            --scheme http \
+            > "$LOG_FILE" 2>&1 &
+        echo $! > "$PID_FILE"
+
+        for i in {1..20}; do
+            sleep 1
+            local READY=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:$WEAVIATE_HTTP_PORT/v1/.well-known/ready" 2>/dev/null)
+            if [ "$READY" == "200" ]; then
+                echo -e "  ${GREEN}✓ Weaviate (原生) 就绪！${NC}"
+                weaviate_schema
+                return 0
+            fi
+            echo -n "."
+        done
+        echo ""
+        echo -e "  ${YELLOW}⚠ Weaviate 原生启动超时，查看 $LOG_FILE${NC}"
+        tail -5 "$LOG_FILE" 2>/dev/null
+        return 1
+    fi
+
+    # 回退到 Docker
     if command -v docker &> /dev/null; then
         echo -e "  使用 Docker 启动 Weaviate (端口 $WEAVIATE_HTTP_PORT)..."
         
@@ -487,14 +532,11 @@ weaviate_start() {
         if [ $? -eq 0 ]; then
             echo -e "  ${GREEN}✓ Weaviate 容器启动中...${NC}"
             
-            # 等待就绪
             for i in {1..30}; do
                 sleep 2
                 local READY=$(curl -s "${CURL_WEAVIATE_AUTH[@]}" -o /dev/null -w "%{http_code}" "http://localhost:$WEAVIATE_HTTP_PORT/v1/.well-known/ready" 2>/dev/null)
                 if [ "$READY" == "200" ]; then
                     echo -e "  ${GREEN}✓ Weaviate 就绪！${NC}"
-                    
-                    # 自动创建 schema
                     weaviate_schema
                     return 0
                 fi
@@ -505,20 +547,26 @@ weaviate_start() {
         fi
     fi
     
-    echo -e "  ${RED}✗ 无法启动 Weaviate${NC}"
+    echo -e "  ${RED}✗ 无法启动 Weaviate（未找到原生二进制或 Docker）${NC}"
     return 1
 }
 
 weaviate_stop() {
     echo -e "${BLUE}停止 Weaviate...${NC}"
-    
-    # 若 8008 上已有 Weaviate 在跑，一律不停止、不杀进程，直接复用
-    if check_port $WEAVIATE_HTTP_PORT; then
-        local READY=$(curl -s "${CURL_WEAVIATE_AUTH[@]}" -o /dev/null -w "%{http_code}" "http://localhost:$WEAVIATE_HTTP_PORT/v1/.well-known/ready" 2>/dev/null)
-        if [ "$READY" == "200" ]; then
-            echo -e "  ${GREEN}✓ 端口 $WEAVIATE_HTTP_PORT 上 Weaviate 正在运行，保持不停止${NC}"
-            return 0
+
+    local PID_FILE="$SILK_DIR/search/weaviate.pid"
+
+    # 通过 PID 文件停止原生进程
+    if [ -f "$PID_FILE" ]; then
+        local PID=$(cat "$PID_FILE")
+        if kill -0 "$PID" 2>/dev/null; then
+            echo -e "  停止原生 Weaviate (PID: $PID)..."
+            kill "$PID" 2>/dev/null
+            sleep 2
+            kill -0 "$PID" 2>/dev/null && kill -9 "$PID" 2>/dev/null
+            echo -e "  ${GREEN}✓ 原生 Weaviate 已停止${NC}"
         fi
+        rm -f "$PID_FILE"
     fi
     
     # 停止 Docker 容器（仅限本脚本启动的 silk-weaviate 容器）
@@ -528,7 +576,7 @@ weaviate_stop() {
         echo -e "  ${GREEN}✓ Docker 容器已停止${NC}"
     fi
     
-    # 停止本地进程（仅当端口占用且不是 Weaviate 就绪时）
+    # 停止残留端口占用进程
     if check_port $WEAVIATE_HTTP_PORT; then
         local READY=$(curl -s "${CURL_WEAVIATE_AUTH[@]}" -o /dev/null -w "%{http_code}" "http://localhost:$WEAVIATE_HTTP_PORT/v1/.well-known/ready" 2>/dev/null)
         if [ "$READY" != "200" ]; then
