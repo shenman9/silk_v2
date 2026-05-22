@@ -70,7 +70,7 @@ class WorkflowManager(
             createdAt = System.currentTimeMillis(),
             updatedAt = System.currentTimeMillis()
         )
-        store.workflows.add(workflow)
+        store.workflows.add(0, workflow)
         save(store)
         logger.info("Created workflow: {} for user {}, groupId={}, agentType={}", workflow.id, userId, groupId, agentType)
         return workflow
