@@ -32,4 +32,24 @@
     <logger name="io.ktor" level="INFO"/>
     <logger name="com.silk" level="${LOG_LEVEL}"/>
     <logger name="com.silk.backend.ai" level="${LOG_LEVEL}"/>
+
+    <!-- Silk Agent IO 日志：prompt/response 单独写入 logs/silk-agent-io.log，不混入主日志 -->
+    <appender name="AGENT_IO" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>logs/silk-agent-io.log</file>
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} %msg%n</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>logs/silk-agent-io.%d{yyyy-MM-dd}.%i.log</fileNamePattern>
+            <maxFileSize>50MB</maxFileSize>
+            <maxHistory>7</maxHistory>
+            <totalSizeCap>200MB</totalSizeCap>
+        </rollingPolicy>
+    </appender>
+
+    <!-- 开启后 prompt/response 写入 logs/silk-agent-io.log，调试完注释掉即可 -->
+    <!-- <logger name="com.silk.backend.ai.DirectModelAgent" level="DEBUG" additivity="false">
+        <appender-ref ref="AGENT_IO"/>
+    </logger> -->
 </configuration>
